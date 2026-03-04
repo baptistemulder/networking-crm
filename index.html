@@ -1,0 +1,970 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Networking CRM — Baptiste Mulder</title>
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'DM Sans', system-ui, sans-serif; background: #F8FAFC; }
+    select, input, textarea, button { font-family: inherit; }
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: #F1F5F9; }
+    ::-webkit-scrollbar-thumb { background: #CBD5E1; border-radius: 3px; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="text/babel">
+const { useState, useEffect, useCallback } = React;
+
+const STAGES = ["À contacter", "Draft créé", "Message envoyé", "Relance envoyée", "Répondu", "Call planifié", "Done"];
+const SECTORS = ["Private Debt", "Leveraged Finance", "Infrastructure Debt", "Restructuring", "DCM", "Other"];
+const GRADES = ["Analyst", "Associate", "VP", "Director", "MD"];
+// Google Sheets Web App URL — remplace après déploiement du Apps Script
+const SHEETS_URL = "https://script.google.com/macros/s/AKfycbx2YbBEMHpwJxdlQer3t9YmPDys6kZI0W21lLvNbGqlyi57h9n4eS22uYaxSb6U75Ythw/exec";
+const USE_SHEETS = true;
+const STORAGE_KEY = "crm:v3"; // fallback localStorage si Sheets pas configuré
+const FOLLOWUP_DAYS = 7;
+
+const BAPTISTE_BIO = `Baptiste Mulder, French-Dutch, 24. CFA charterholder (all 3 levels, first attempt). Master in Management IESEG (FT Top 26). Starting LBS MFA September 2026. Experience: BNP Paribas CIB Lisbon (Corporate Coverage EMEA), Analyst at Magellan Asset Finance Paris (vessel financing €90m, infrastructure €40m). Targeting Private Debt / Direct Lending / Leveraged Finance in London.`;
+
+const SAMPLE = [
+  { id: 1, name: "Sarah Chen", company: "Arcmont Asset Management", role: "Associate - Direct Lending", grade: "Associate", school: "LBS MFA 2021", linkedin: "linkedin.com/in/sarahchen", email: "s.chen@arcmont.com", sector: "Private Debt", stage: "À contacter", notes: "", lastContact: null, followUpDate: null, source: "manual", messageHistory: [] },
+  { id: 2, name: "James O'Brien", company: "Hayfin Capital", role: "Analyst - Private Credit", grade: "Analyst", school: "LBS MFA 2023", linkedin: "linkedin.com/in/jamesobrien", email: "j.obrien@hayfin.com", sector: "Private Debt", stage: "Message envoyé", notes: "", lastContact: "2026-02-20", followUpDate: "2026-02-27", source: "manual", messageHistory: [] },
+];
+
+const todayStr = () => new Date().toISOString().split("T")[0];
+const addDays = (d, n) => new Date(new Date(d).getTime() + n * 86400000).toISOString().split("T")[0];
+const isPast = (d) => d && new Date(d) <= new Date();
+
+const STAGE_COLOR = {
+  "À contacter": "#94A3B8", "Draft créé": "#6366F1", "Message envoyé": "#3B82F6", "Relance envoyée": "#F59E0B",
+  "Répondu": "#10B981", "Call planifié": "#8B5CF6", "Done": "#059669",
+};
+const GRADE_COLOR = { Analyst: "#3B82F6", Associate: "#8B5CF6", VP: "#EC4899", Director: "#F59E0B", MD: "#EF4444" };
+
+const exportCSV = (contacts) => {
+  const h = ["Name","Company","Role","Grade","Sector","Email","LinkedIn","Stage","Last Contact"];
+  const rows = contacts.map(c => [c.name,c.company,c.role,c.grade,c.sector,c.email,c.linkedin,c.stage,c.lastContact||""]);
+  const blob = new Blob([[h,...rows].map(r=>r.join(",")).join("\n")],{type:"text/csv"});
+  const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = "contacts.csv"; a.click();
+};
+
+// ── Parse Apollo CSV ──
+const parseApolloCsv = (text) => {
+  const lines = text.trim().split("\n");
+  if (lines.length < 2) return [];
+  const parseRow = (line) => {
+    const vals = []; let cur = "", inQ = false;
+    for (const ch of line) {
+      if (ch === '"') inQ = !inQ;
+      else if (ch === "," && !inQ) { vals.push(cur.trim()); cur = ""; }
+      else cur += ch;
+    }
+    vals.push(cur.trim());
+    return vals.map(v => v.replace(/^"|"$/g,"").trim());
+  };
+  const headers = parseRow(lines[0]).map(h => h.toLowerCase());
+  const get = (row, ...keys) => { for (const k of keys) { const i = headers.indexOf(k); if (i >= 0 && row[i]) return row[i]; } return ""; };
+  return lines.slice(1).map(line => {
+    const row = parseRow(line);
+    const firstName = get(row, "first name");
+    const lastName = get(row, "last name");
+    const name = `${firstName} ${lastName}`.trim();
+    const role = get(row, "title", "job title");
+    const seniority = get(row, "seniority").toLowerCase();
+    let grade = "Analyst";
+    if (seniority === "partner" || seniority === "c_suite" || role.toLowerCase().includes("managing director") || role.toLowerCase().includes(" md")) grade = "MD";
+    else if (seniority === "director" || role.toLowerCase().includes("director")) grade = "Director";
+    else if (seniority === "vp" || seniority === "vice_president" || role.toLowerCase().includes("vice president") || /\bvp\b/i.test(role)) grade = "VP";
+    else if (seniority === "senior" || seniority === "manager" || role.toLowerCase().includes("associate") || role.toLowerCase().includes("manager")) grade = "Associate";
+    const company = get(row, "company name", "organization", "account name");
+    const email = get(row, "email", "work email");
+    const linkedin = get(row, "person linkedin url", "linkedin url", "linkedin").replace(/https?:\/\//,"");
+    const industry = get(row, "industry");
+    const keywords = get(row, "keywords").slice(0, 120);
+    const departments = get(row, "departments", "sub departments");
+    return { name, company, role, email, linkedin, grade, industry, keywords, departments, selected: true, sector: "" };
+  }).filter(r => r.name.trim() && r.company);
+};
+
+// ── AI classify contacts using full context ──
+const classifyContacts = async (contacts) => {
+  const list = contacts.map((c,i) => `${i}. ${c.name} | ${c.role} | ${c.company} | industry: ${c.industry} | dept: ${c.departments} | keywords: ${c.keywords.slice(0,80)}`).join("\n");
+  const res = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model: "claude-sonnet-4-20250514", max_tokens: 1500,
+      messages: [{ role: "user", content: `Classify each person into a sector based on their role, company, industry, department and keywords. Return ONLY a JSON array of strings, same order, no markdown.
+
+Preferred sectors (use these if they clearly match):
+- "Private Debt" → Private Debt / Direct Lending / Credit funds / private credit
+- "Leveraged Finance" → LevFin / M&A / Investment Banking / advisory / corporate finance
+- "Infrastructure Debt" → Infrastructure / Project Finance / Energy / Utilities
+- "Restructuring" → Restructuring / Special Situations / Distressed / turnaround
+- "DCM" → Debt Capital Markets / Bonds / Fixed Income / capital markets
+
+If none of the above clearly match, create a SHORT custom sector name (2-3 words max) directly derived from their industry or keywords field. Examples: "Asset Management", "Private Equity", "Real Estate", "Hedge Fund", "Transaction Advisory", "Corporate Banking", "Risk Advisory".
+
+People:
+${list}
+
+Return: ["sector1","sector2",...]` }]
+    })
+  });
+  const d = await res.json();
+  const text = d.content?.find(b=>b.type==="text")?.text || "[]";
+  return JSON.parse(text.replace(/```json|```/g,"").trim());
+};
+
+// ── Generate professional personalized email ──
+const generateMsg = async (contact, isFollowUp = false) => {
+  const notesContext = contact.notes ? `Additional context from LinkedIn/notes: ${contact.notes}` : "";
+  
+  const prompt = isFollowUp
+    ? `Write a short follow-up email from Baptiste Mulder to ${contact.name} (${contact.role} at ${contact.company}).
+Context: Baptiste sent a first email ${FOLLOWUP_DAYS} days ago, no reply.
+${notesContext}
+
+Format:
+Subject: [subject line]
+[blank line]
+Dear ${contact.name.split(" ")[0]},
+[2-3 sentences: brief reference to previous email, polite nudge, renew call request]
+Best regards,
+Baptiste Mulder
+
+Rules: polite, not pushy, short. English only.`
+
+    : `Write a professional cold email from Baptiste Mulder to ${contact.name}, ${contact.role} at ${contact.company}.
+${notesContext}
+
+Format EXACTLY as follows — do not add or remove sections:
+
+Subject: Coffee chat about [their specific role/activity] at ${contact.company}
+
+Dear ${contact.name.split(" ")[0]},
+
+My name is Baptiste Mulder — Analyst at Magellan Asset Finance (Paris) where I work on asset-based mandates, primarily project finance and shipping. I am joining the LBS MFA programme in September 2026.
+
+[ONE sentence personalised to their specific role and work at ${contact.company} — use their title "${contact.role}" and what ${contact.company} does in ${contact.sector !== "Other" ? contact.sector : "finance"}${notesContext ? ". Use this context: " + contact.notes : ""}. Show genuine interest, be specific.]
+
+Would you be available for a short call in the coming days to discuss?
+
+Thank you very much in advance for your time.
+
+Best regards,
+Baptiste Mulder
+
+Rules:
+- Only personalise the bracketed sentence — keep all other lines exactly as written
+- The personalised sentence must reference something specific about their role or ${contact.company}
+- No CV mention, no bullet points, no fluff
+- English only`;
+
+  const res = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: 500, messages: [{ role: "user", content: prompt }] })
+  });
+  const d = await res.json();
+  let text = d.content?.find(b=>b.type==="text")?.text || "Error generating message.";
+  // Clean up formatting: max 1 consecutive blank line, trim trailing spaces
+  text = text
+    .split("\n")
+    .map(l => l.trimEnd())
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")  // max 1 blank line between paragraphs
+    .trim();
+  return text;
+};
+
+// ── Create Gmail draft via MCP ──
+const createGmailDraft = async (contact, messageText) => {
+  const lines = messageText.split("\n");
+  const subjectLine = lines[0].toLowerCase().startsWith("subject:") ? lines[0].replace(/^subject:\s*/i,"").trim() : lines[0].trim();
+  const body = lines.slice(lines[0].toLowerCase().startsWith("subject:") ? 1 : 1).join("\n").trim();
+  const res = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model: "claude-sonnet-4-20250514", max_tokens: 300,
+      messages: [{ role: "user", content: `Create a Gmail draft email.
+To: ${contact.email}
+Subject: ${subjectLine}
+Body:
+${body}
+
+Use the gmail tool to create this draft now.` }],
+      mcp_servers: [{ type: "url", url: "https://gmail.mcp.claude.com/mcp", name: "gmail" }]
+    })
+  });
+  return res.ok;
+};
+
+function App() {
+  const [contacts, setContacts] = useState([]);
+  const [loaded, setLoaded] = useState(false);
+  const [tab, setTab] = useState("contacts");
+  const [selected, setSelected] = useState(null);
+  const [selectedIds, setSelectedIds] = useState(new Set());
+  const [filterSector, setFilterSector] = useState("");
+  const [filterStage, setFilterStage] = useState("");
+  const [filterGrade, setFilterGrade] = useState("");
+
+  // Add contact
+  const [showAdd, setShowAdd] = useState(false);
+  const [newC, setNewC] = useState({ name:"",company:"",role:"",grade:"Analyst",linkedin:"",email:"",sector:"Private Debt" });
+
+  // Contact panel
+  const [message, setMessage] = useState("");
+  const [generating, setGenerating] = useState(false);
+  const [gmailStatus, setGmailStatus] = useState("");
+
+  // Bulk draft
+  const [bulkGenerating, setBulkGenerating] = useState(false);
+  const [bulkProgress, setBulkProgress] = useState("");
+
+  // Apollo import
+  const [showApollo, setShowApollo] = useState(false);
+  const [apolloParsing, setApolloParsing] = useState(false);
+  const [apolloResults, setApolloResults] = useState([]);
+  const [apolloError, setApolloError] = useState("");
+  const [apolloStep, setApolloStep] = useState("upload"); // upload | review
+
+  // Calendar
+  const [calShow, setCalShow] = useState(false);
+  const [calContact, setCalContact] = useState(null);
+  const [calDate, setCalDate] = useState("");
+  const [calTime, setCalTime] = useState("10:00");
+  const [calPlatform, setCalPlatform] = useState("Google Meet");
+  const [calStatus, setCalStatus] = useState("");
+  const [repliesStatus, setRepliesStatus] = useState("");
+
+  // ── Load contacts (Sheets or localStorage) ──
+  useEffect(() => {
+    const load = async () => {
+      if (USE_SHEETS) {
+        try {
+          const res = await fetch(`${SHEETS_URL}?action=getContacts`, { mode: "cors" });
+          const data = await res.json();
+          if (Array.isArray(data) && data.length) {
+            setContacts(data);
+            setLoaded(true);
+            return;
+          }
+        } catch(e) { console.warn("Sheets load failed, falling back to localStorage"); }
+      }
+      try { const s = localStorage.getItem(STORAGE_KEY); setContacts(s ? JSON.parse(s) : SAMPLE); }
+      catch { setContacts(SAMPLE); }
+      setLoaded(true);
+    };
+    load();
+  }, []);
+
+  // ── Save to localStorage always (fast local cache) ──
+  useEffect(() => {
+    if (loaded) localStorage.setItem(STORAGE_KEY, JSON.stringify(contacts));
+  }, [contacts, loaded]);
+
+  // ── Sync single contact to Sheets ──
+  const syncContact = async (contact) => {
+    if (!USE_SHEETS) return;
+    try {
+      await fetch(SHEETS_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "upsertContact", contact })
+      });
+    } catch(e) { console.warn("Sheets sync failed"); }
+  };
+
+  // ── Sync batch to Sheets ──
+  const syncBatch = async (contactsList) => {
+    if (!USE_SHEETS) return;
+    try {
+      await fetch(SHEETS_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "upsertBatch", contacts: contactsList })
+      });
+    } catch(e) { console.warn("Sheets batch sync failed"); }
+  };
+
+  // ── Sync delete to Sheets ──
+  const syncDelete = async (id) => {
+    if (!USE_SHEETS) return;
+    try {
+      await fetch(SHEETS_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "deleteContact", id })
+      });
+    } catch(e) { console.warn("Sheets delete sync failed"); }
+  };
+
+  // ── Poll Sheets for updates (reply detection by Apps Script) every 60s ──
+  useEffect(() => {
+    if (!USE_SHEETS || !loaded) return;
+    const interval = setInterval(async () => {
+      try {
+        const res = await fetch(`${SHEETS_URL}?action=getContacts`, { mode: "cors" });
+        const data = await res.json();
+        if (!Array.isArray(data)) return;
+        // Only update contacts whose stage has changed (from Apps Script)
+        setContacts(prev => prev.map(local => {
+          const remote = data.find(r => String(r.id) === String(local.id));
+          if (!remote) return local;
+          if (remote.stage !== local.stage) return { ...local, stage: remote.stage, lastContact: remote.lastContact };
+          return local;
+        }));
+      } catch {}
+    }, 60000); // every 60 seconds
+    return () => clearInterval(interval);
+  }, [loaded]);
+
+  const updateContact = useCallback((id, patch) => {
+    setContacts(p => {
+      const updated = p.map(c => c.id === id ? { ...c, ...patch } : c);
+      const contact = updated.find(c => c.id === id);
+      if (contact) syncContact(contact);
+      return updated;
+    });
+    setSelected(p => p?.id === id ? { ...p, ...patch } : p);
+  }, []);
+
+  const deleteContact = (id) => {
+    setContacts(p => p.filter(c => c.id !== id));
+    setSelected(null);
+    setSelectedIds(p => { const n = new Set(p); n.delete(id); return n; });
+    syncDelete(id);
+  };
+
+  const setStage = useCallback((id, stage) => {
+    const patch = { stage, lastContact: todayStr() };
+    if (stage === "Message envoyé" || stage === "Draft créé" || stage === "Relance envoyée") patch.followUpDate = addDays(todayStr(), FOLLOWUP_DAYS);
+    updateContact(id, patch);
+    if (stage === "Call planifié") {
+      setCalContact(contacts.find(c => c.id === id));
+      setCalShow(true);
+    }
+  }, [contacts, updateContact]);
+
+  const filtered = contacts.filter(c => {
+    if (filterSector && c.sector !== filterSector) return false;
+    if (filterStage && c.stage !== filterStage) return false;
+    if (filterGrade && c.grade !== filterGrade) return false;
+    return true;
+  });
+
+  const due = contacts.filter(c => (c.stage === "Message envoyé" || c.stage === "Draft créé" || c.stage === "Relance envoyée") && isPast(c.followUpDate));
+
+  const toggleSelect = (id) => {
+    setSelectedIds(p => { const n = new Set(p); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  };
+
+  const toggleSelectAll = () => {
+    if (selectedIds.size === filtered.length) setSelectedIds(new Set());
+    else setSelectedIds(new Set(filtered.map(c => c.id)));
+  };
+
+  // ── Single draft ──
+  const handleGenerateDraft = async (contact, isFollowUp = false) => {
+    setGenerating(true); setMessage(""); setGmailStatus("");
+    const msg = await generateMsg(contact, isFollowUp);
+    setMessage(msg);
+    updateContact(contact.id, { messageHistory: [...(contact.messageHistory||[]), { date: todayStr(), type: isFollowUp?"followup":"initial", preview: msg.slice(0,80) }] });
+    setGenerating(false);
+  };
+
+  const handleSendDraft = async (contact, msgText) => {
+    if (!contact.email) { setGmailStatus("⚠️ No email — add it first"); return; }
+    setGmailStatus("Creating draft...");
+    const ok = await createGmailDraft(contact, msgText);
+    setGmailStatus(ok ? "✅ Draft created in Gmail" : "⚠️ Gmail error — copy manually");
+    if (ok) setStage(contact.id, "Draft créé");
+  };
+
+  // ── Bulk: generate + send all selected ──
+  const handleBulkDraft = async () => {
+    const targets = filtered.filter(c => selectedIds.has(c.id) && c.email);
+    if (!targets.length) { setBulkProgress("⚠️ No contacts with email selected"); return; }
+    setBulkGenerating(true);
+    let done = 0;
+    for (const contact of targets) {
+      setBulkProgress(`⏳ ${done}/${targets.length} — generating for ${contact.name}...`);
+      const msg = await generateMsg(contact, false);
+      await createGmailDraft(contact, msg);
+      updateContact(contact.id, {
+        stage: "Draft créé",
+        lastContact: todayStr(),
+        followUpDate: addDays(todayStr(), FOLLOWUP_DAYS),
+        messageHistory: [...(contact.messageHistory||[]), { date: todayStr(), type: "initial", preview: msg.slice(0,80) }]
+      });
+      done++;
+    }
+    setBulkProgress(`✅ ${done} drafts created in Gmail`);
+    setSelectedIds(new Set());
+    setBulkGenerating(false);
+    setTimeout(() => setBulkProgress(""), 4000);
+  };
+
+  // ── Apollo CSV import ──
+  const handleCSVUpload = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setApolloParsing(true); setApolloResults([]); setApolloError(""); setApolloStep("upload");
+    const reader = new FileReader();
+    reader.onload = async (ev) => {
+      try {
+        const raw = parseApolloCsv(ev.target.result);
+        if (!raw.length) { setApolloError("No contacts found in CSV."); setApolloParsing(false); return; }
+        // AI classify sectors
+        const sectors = await classifyContacts(raw);
+        const withSectors = raw.map((c, i) => ({ ...c, sector: sectors[i] || "Other" }));
+        setApolloResults(withSectors);
+        setApolloStep("review");
+      } catch(err) { setApolloError("Parse error: " + err.message); }
+      setApolloParsing(false);
+    };
+    reader.readAsText(file);
+  };
+
+  const importApollo = () => {
+    const toImport = apolloResults.filter(r=>r.selected);
+    if (!toImport.length) return;
+    const newContacts = toImport.map(r => ({
+      id: Date.now()+Math.random(), name: r.name, company: r.company, role: r.role,
+      grade: r.grade, school: "", linkedin: r.linkedin, email: r.email,
+      sector: r.sector, stage: "À contacter", notes: "", lastContact: null,
+      followUpDate: null, source: "apollo", messageHistory: []
+    }));
+    setContacts(p => [...p, ...newContacts]);
+    syncBatch(newContacts);
+    setShowApollo(false); setApolloResults([]); setApolloStep("upload");
+  };
+
+  // ── Calendar ──
+  const createCalEvent = async () => {
+    if (!calDate || !calContact) return;
+    setCalStatus("Creating...");
+    const res = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: "claude-sonnet-4-20250514", max_tokens: 200,
+        messages: [{ role: "user", content: `Create a Google Calendar event: Title "Call - ${calContact.name} (${calContact.company})", Start: ${calDate}T${calTime}:00, Duration: 20 minutes, Platform: ${calPlatform}${calContact.email?`, Attendee: ${calContact.email}`:""}. Use the calendar tool.` }],
+        mcp_servers: [{ type: "url", url: "https://gmail.mcp.claude.com/mcp", name: "gmail" }]
+      })
+    });
+    setCalStatus(res.ok ? "✅ Event created" : "⚠️ Error");
+  };
+
+
+  // ── Check Gmail replies ──
+  // This triggers a message in the Claude chat — Claude has direct Gmail MCP access
+  const checkReplies = () => {
+    const sentContacts = contacts.filter(c =>
+      ["Draft créé", "Message envoyé", "Relance envoyée"].includes(c.stage) && c.email
+    );
+    if (!sentContacts.length) { setRepliesStatus("No contacts to check."); return; }
+
+    const list = sentContacts.map(c => `${c.name} | ${c.email} | ${c.company}`).join("\n");
+    const msg = `CHECK_REPLIES:\n${list}`;
+
+    // Copy to clipboard and show instruction
+    navigator.clipboard?.writeText(msg).then(() => {
+      setRepliesStatus("📋 Copied — paste in Claude chat to scan Gmail");
+    }).catch(() => {
+      setRepliesStatus("📋 Copy the text below and paste in chat");
+    });
+  };
+
+  // ── Apply reply updates from Claude scan ──
+  const applyReplyUpdate = (email, newStage) => {
+    const contact = contacts.find(c => c.email === email);
+    if (!contact) return;
+    updateContact(contact.id, { stage: newStage, lastContact: todayStr() });
+    if (newStage === "Call planifié") {
+      setCalContact(contact);
+      setCalShow(true);
+    }
+  };
+
+  // Expose applyReplyUpdate globally so Claude can call it from chat
+  if (typeof window !== "undefined") {
+    window.crmUpdateReply = applyReplyUpdate;
+    window.crmContacts = contacts;
+  }
+
+  // ── Add contact ──
+  const addContact = () => {
+    if (!newC.name || !newC.company) return;
+    const c = { ...newC, id: Date.now(), lastContact: null, followUpDate: null, source: "manual", messageHistory: [], school: "", notes: "" };
+    setContacts(p => [...p, c]);
+    setNewC({ name:"",company:"",role:"",grade:"Analyst",linkedin:"",email:"",sector:"Private Debt" });
+    setShowAdd(false);
+    setSelected(c);
+  };
+
+  if (!loaded) return <div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",fontSize:13,color:"#9CA3AF"}}>Loading...</div>;
+
+  const selectedContacts = filtered.filter(c => selectedIds.has(c.id));
+  const selectedWithEmail = selectedContacts.filter(c => c.email);
+
+  return (
+    <div style={{ fontFamily: "'DM Sans', system-ui, sans-serif", background: "#F8FAFC", minHeight: "100vh", color: "#111" }}>
+
+      {/* HEADER */}
+      <div style={{ background: "#fff", borderBottom: "1px solid #E5E7EB", padding: "0 24px", position: "sticky", top: 0, zIndex: 40 }}>
+        <div style={{ maxWidth: 1200, margin: "0 auto", display: "flex", alignItems: "center", justifyContent: "space-between", height: 54 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            <span style={{ fontSize: 15, fontWeight: 700 }}>Networking CRM</span>
+            <span style={{ fontSize: 11, color: "#9CA3AF" }}>Baptiste Mulder · LBS MFA 2026</span>
+            <span style={{ fontSize: 10, padding: "2px 7px", borderRadius: 4, background: USE_SHEETS ? "#D1FAE5" : "#FEF3C7", color: USE_SHEETS ? "#065F46" : "#92400E", fontWeight: 600 }}>{USE_SHEETS ? "● Sheets sync ON" : "● Local only"}</span>
+          </div>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            {bulkProgress && <span style={{ fontSize: 11, color: bulkProgress.startsWith("✅")?"#059669":bulkProgress.startsWith("⚠️")?"#B45309":"#6B7280", fontWeight: 500 }}>{bulkProgress}</span>}
+            {due.length > 0 && <button onClick={() => setTab("followups")} style={{ fontSize: 11, fontWeight: 600, color: "#B45309", background: "#FEF3C7", border: "1px solid #FDE68A", padding: "4px 10px", borderRadius: 6, cursor: "pointer" }}>🔔 {due.length} follow-up{due.length>1?"s":""} due</button>}
+            {selectedIds.size > 0 && (
+              <Btn warning onClick={handleBulkDraft} disabled={bulkGenerating || selectedWithEmail.length === 0}>
+                {bulkGenerating ? "⏳ Generating..." : `📧 Create ${selectedWithEmail.length} Gmail draft${selectedWithEmail.length>1?"s":""}`}
+              </Btn>
+            )}
+            {repliesStatus && <span style={{ fontSize:11, color: repliesStatus.startsWith("✅")?"#059669":repliesStatus.startsWith("⚠️")?"#B45309":"#9CA3AF", fontWeight:500 }}>{repliesStatus}</span>}
+            <Btn outline onClick={checkReplies}>📬 Check replies</Btn>
+            <Btn outline onClick={() => exportCSV(filtered)}>↓ CSV</Btn>
+            <Btn outline onClick={() => { setShowApollo(true); setApolloResults([]); setApolloError(""); setApolloStep("upload"); }}>📥 Import Apollo</Btn>
+            <Btn primary onClick={() => setShowAdd(true)}>+ Add</Btn>
+          </div>
+        </div>
+        {/* TABS */}
+        <div style={{ maxWidth: 1200, margin: "0 auto", display: "flex" }}>
+          {[
+            { id:"contacts", label:`Contacts (${contacts.length})` },
+            { id:"pipeline", label:"Pipeline" },
+            { id:"followups", label:`Follow-ups${due.length>0?` · ${due.length}`:""}` },
+            { id:"analytics", label:"Analytics" },
+          ].map(t => (
+            <button key={t.id} onClick={() => setTab(t.id)} style={{ padding:"10px 16px", fontSize:13, fontWeight:tab===t.id?600:400, color:tab===t.id?"#111":"#6B7280", background:"none", border:"none", borderBottom:tab===t.id?"2px solid #111":"2px solid transparent", cursor:"pointer" }}>
+              {t.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* FILTERS */}
+      <div style={{ background:"#fff", borderBottom:"1px solid #E5E7EB", padding:"8px 24px" }}>
+        <div style={{ maxWidth:1200, margin:"0 auto", display:"flex", gap:8, alignItems:"center" }}>
+          <Sel value={filterSector} onChange={e=>setFilterSector(e.target.value)} options={["", ...Array.from(new Set(contacts.map(c=>c.sector).filter(Boolean))).sort()]} placeholder="All sectors" />
+          <Sel value={filterStage} onChange={e=>setFilterStage(e.target.value)} options={["", ...STAGES]} placeholder="All stages" />
+          <Sel value={filterGrade} onChange={e=>setFilterGrade(e.target.value)} options={["", ...GRADES]} placeholder="All grades" />
+          {(filterSector||filterStage||filterGrade) && <button onClick={()=>{setFilterSector("");setFilterStage("");setFilterGrade("");}} style={{fontSize:11,color:"#9CA3AF",background:"none",border:"none",cursor:"pointer"}}>× Clear</button>}
+          <span style={{ marginLeft:"auto", fontSize:11, color:"#9CA3AF" }}>{filtered.length} contacts{selectedIds.size>0?` · ${selectedIds.size} selected`:""}</span>
+        </div>
+      </div>
+
+      <div style={{ maxWidth:1200, margin:"0 auto", padding:"20px 24px" }}>
+
+        {/* CONTACTS */}
+        {tab === "contacts" && (
+          <div style={{ background:"#fff", borderRadius:10, border:"1px solid #E5E7EB", overflow:"hidden" }}>
+            <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13 }}>
+              <thead>
+                <tr style={{ borderBottom:"1px solid #E5E7EB", background:"#F9FAFB" }}>
+                  <th style={{ padding:"9px 14px", width:36 }}>
+                    <input type="checkbox" checked={selectedIds.size===filtered.length&&filtered.length>0} onChange={toggleSelectAll} style={{ cursor:"pointer" }} />
+                  </th>
+                  {["Name","Company","Role","Grade","Sector","Stage","Follow-up",""].map(h=>(
+                    <th key={h} style={{ padding:"9px 14px", textAlign:"left", fontSize:10, fontWeight:600, color:"#6B7280", textTransform:"uppercase", letterSpacing:"0.4px" }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {filtered.map((c,i) => (
+                  <tr key={c.id} onClick={()=>{setSelected(c);setMessage("");setGmailStatus("");}} style={{ borderBottom:"1px solid #F3F4F6", background: selectedIds.has(c.id)?"#EFF6FF": i%2===0?"#fff":"#FAFAFA", cursor:"pointer" }}>
+                    <td style={{ padding:"10px 14px" }} onClick={e=>e.stopPropagation()}>
+                      <input type="checkbox" checked={selectedIds.has(c.id)} onChange={()=>toggleSelect(c.id)} style={{ cursor:"pointer" }} />
+                    </td>
+                    <td style={{ padding:"10px 14px", fontWeight:600 }}>{c.name}</td>
+                    <td style={{ padding:"10px 14px", color:"#374151", maxWidth:140, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{c.company}</td>
+                    <td style={{ padding:"10px 14px", color:"#6B7280", maxWidth:140, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{c.role}</td>
+                    <td style={{ padding:"10px 14px" }}>
+                      <span style={{ fontSize:11, fontWeight:600, color:GRADE_COLOR[c.grade]||"#6B7280", background:`${GRADE_COLOR[c.grade]||"#6B7280"}15`, padding:"2px 7px", borderRadius:4 }}>{c.grade}</span>
+                    </td>
+                    <td style={{ padding:"10px 14px", fontSize:11, color:"#6B7280" }}>{c.sector}</td>
+                    <td style={{ padding:"10px 14px" }}>
+                      <span style={{ fontSize:11, fontWeight:600, color:STAGE_COLOR[c.stage]||"#6B7280", background:`${STAGE_COLOR[c.stage]||"#6B7280"}18`, padding:"3px 8px", borderRadius:20 }}>{c.stage}</span>
+                    </td>
+                    <td style={{ padding:"10px 14px", fontSize:11, color:isPast(c.followUpDate)?"#B45309":"#9CA3AF" }}>
+                      {c.followUpDate?(isPast(c.followUpDate)?`🔔 ${c.followUpDate}`:c.followUpDate):"—"}
+                    </td>
+                    <td style={{ padding:"10px 14px", textAlign:"right" }}>
+                      <button onClick={(e)=>{e.stopPropagation();deleteContact(c.id);}} style={{ fontSize:14, color:"#D1D5DB", background:"none", border:"none", cursor:"pointer", lineHeight:1, padding:"2px 4px" }} title="Delete" onMouseEnter={e=>e.currentTarget.style.color="#EF4444"} onMouseLeave={e=>e.currentTarget.style.color="#D1D5DB"}>✕</button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {/* PIPELINE */}
+        {tab === "pipeline" && (
+          <div>
+            <div style={{ display:"grid", gridTemplateColumns:"repeat(6,1fr)", gap:10, marginBottom:14 }}>
+              {STAGES.map(s => (
+                <div key={s} style={{ background:"#fff", borderRadius:8, padding:"12px", textAlign:"center", border:"1px solid #E5E7EB" }}>
+                  <div style={{ fontSize:10, fontWeight:600, color:"#9CA3AF", textTransform:"uppercase", marginBottom:4 }}>{s}</div>
+                  <div style={{ fontSize:22, fontWeight:700, color:STAGE_COLOR[s] }}>{contacts.filter(c=>c.stage===s).length}</div>
+                </div>
+              ))}
+            </div>
+            <div style={{ display:"grid", gridTemplateColumns:"repeat(6,1fr)", gap:10 }}>
+              {STAGES.map(s => (
+                <div key={s} style={{ background:"#fff", borderRadius:10, padding:10, border:"1px solid #E5E7EB", minHeight:160 }}>
+                  <div style={{ fontSize:10, fontWeight:700, color:"#9CA3AF", textTransform:"uppercase", letterSpacing:"0.5px", marginBottom:8 }}>{s}</div>
+                  {filtered.filter(c=>c.stage===s).map(c => (
+                    <div key={c.id} onClick={()=>{setSelected(c);setMessage("");setGmailStatus("");}} style={{ background:"#F9FAFB", borderRadius:6, padding:"8px 10px", marginBottom:6, cursor:"pointer", border:"1px solid #E5E7EB" }}
+                      onMouseEnter={e=>e.currentTarget.style.borderColor="#2563EB"}
+                      onMouseLeave={e=>e.currentTarget.style.borderColor="#E5E7EB"}>
+                      <div style={{ fontSize:11, fontWeight:600, marginBottom:2 }}>{c.name}</div>
+                      <div style={{ fontSize:10, color:"#6B7280" }}>{c.company}</div>
+                      {isPast(c.followUpDate) && <div style={{ fontSize:9, color:"#B45309", marginTop:3 }}>🔔 Follow-up due</div>}
+                    </div>
+                  ))}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* FOLLOW-UPS */}
+        {tab === "followups" && (
+          <div>
+            {due.length === 0 ? (
+              <div style={{ background:"#fff", borderRadius:10, border:"1px solid #E5E7EB", padding:48, textAlign:"center" }}>
+                <div style={{ fontSize:28, marginBottom:8 }}>🎉</div>
+                <div style={{ fontWeight:600, color:"#6B7280" }}>No follow-ups due</div>
+              </div>
+            ) : due.map(c => (
+              <div key={c.id} style={{ background:"#fff", borderRadius:10, border:"1px solid #FDE68A", padding:"14px 18px", marginBottom:10, display:"flex", alignItems:"center", justifyContent:"space-between", gap:16 }}>
+                <div>
+                  <div style={{ fontWeight:700, fontSize:14 }}>{c.name}</div>
+                  <div style={{ fontSize:12, color:"#6B7280", marginTop:2 }}>{c.role} · {c.company}</div>
+                  <div style={{ fontSize:11, color:"#B45309", marginTop:4 }}>Due since {c.followUpDate}</div>
+                </div>
+                <div style={{ display:"flex", gap:8 }}>
+                  <Btn outline onClick={()=>{setSelected(c);setMessage("");setGmailStatus("");setTab("contacts");}}>Open</Btn>
+                  <Btn warning onClick={async()=>{
+                    const msg = await generateMsg(c, true);
+                    if (c.email) { await createGmailDraft(c, msg); setStage(c.id,"Relance envoyée"); }
+                    else { setSelected(c); setMessage(msg); setGmailStatus("⚠️ No email — copy manually"); setTab("contacts"); }
+                  }}>⚡ 1-click follow-up</Btn>
+                  <Btn outline onClick={()=>setStage(c.id,"Répondu")}>✓ Replied</Btn>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* ANALYTICS */}
+        {tab === "analytics" && (
+          <div style={{ display:"flex", flexDirection:"column", gap:16 }}>
+            <div style={{ display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:12 }}>
+              {[
+                { label:"Total", value:contacts.length, color:"#2563EB" },
+                { label:"Replied", value:contacts.filter(c=>["Répondu","Call planifié","Done"].includes(c.stage)).length, color:"#10B981" },
+                { label:"Calls booked", value:contacts.filter(c=>["Call planifié","Done"].includes(c.stage)).length, color:"#8B5CF6" },
+                { label:"Reply rate", value:()=>{const s=contacts.filter(c=>c.stage!=="À contacter").length;return s?Math.round(contacts.filter(c=>["Répondu","Call planifié","Done"].includes(c.stage)).length/s*100)+"%":"—"}, color:"#F59E0B" },
+              ].map(m => (
+                <div key={m.label} style={{ background:"#fff", borderRadius:10, border:"1px solid #E5E7EB", padding:"18px 20px" }}>
+                  <div style={{ fontSize:10, fontWeight:600, color:"#9CA3AF", textTransform:"uppercase", letterSpacing:"0.5px", marginBottom:6 }}>{m.label}</div>
+                  <div style={{ fontSize:28, fontWeight:700, color:m.color }}>{typeof m.value==="function"?m.value():m.value}</div>
+                </div>
+              ))}
+            </div>
+            <div style={{ background:"#fff", borderRadius:10, border:"1px solid #E5E7EB", overflow:"hidden" }}>
+              <div style={{ padding:"12px 18px", borderBottom:"1px solid #E5E7EB", fontSize:13, fontWeight:600 }}>By sector</div>
+              <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13 }}>
+                <thead><tr style={{ background:"#F9FAFB" }}>
+                  {["Sector","Total","Replied","Rate",""].map(h=><th key={h} style={{ padding:"8px 16px", textAlign:"left", fontSize:10, fontWeight:600, color:"#9CA3AF", textTransform:"uppercase" }}>{h}</th>)}
+                </tr></thead>
+                <tbody>
+                  {SECTORS.map(s => {
+                    const total = contacts.filter(c=>c.sector===s).length;
+                    if (!total) return null;
+                    const replied = contacts.filter(c=>c.sector===s&&["Répondu","Call planifié","Done"].includes(c.stage)).length;
+                    const rate = Math.round(replied/total*100);
+                    return (
+                      <tr key={s} style={{ borderTop:"1px solid #F3F4F6" }}>
+                        <td style={{ padding:"10px 16px", fontWeight:600 }}>{s}</td>
+                        <td style={{ padding:"10px 16px", color:"#374151" }}>{total}</td>
+                        <td style={{ padding:"10px 16px", color:"#10B981", fontWeight:600 }}>{replied}</td>
+                        <td style={{ padding:"10px 16px", color:"#F59E0B", fontWeight:600 }}>{rate}%</td>
+                        <td style={{ padding:"10px 16px", width:120 }}>
+                          <div style={{ background:"#F3F4F6", borderRadius:4, height:5 }}>
+                            <div style={{ width:`${rate}%`, height:"100%", background:"#2563EB", borderRadius:4 }} />
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* ── CONTACT PANEL ── */}
+      {selected && (
+        <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.25)", zIndex:50, display:"flex", justifyContent:"flex-end" }} onClick={()=>setSelected(null)}>
+          <div style={{ background:"#fff", width:"100%", maxWidth:460, height:"100%", overflowY:"auto", borderLeft:"1px solid #E5E7EB", boxShadow:"-4px 0 24px rgba(0,0,0,0.08)" }} onClick={e=>e.stopPropagation()}>
+
+            <div style={{ padding:"18px 20px 14px", borderBottom:"1px solid #E5E7EB", position:"sticky", top:0, background:"#fff", zIndex:10 }}>
+              <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start" }}>
+                <div>
+                  <div style={{ fontSize:16, fontWeight:700 }}>{selected.name}</div>
+                  <div style={{ fontSize:12, color:"#6B7280", marginTop:1 }}>{selected.role}</div>
+                  <div style={{ fontSize:13, fontWeight:600, color:"#2563EB", marginTop:2 }}>{selected.company}</div>
+                  <div style={{ display:"flex", gap:6, marginTop:8, flexWrap:"wrap" }}>
+                    {selected.linkedin && <a href={`https://${selected.linkedin}`} target="_blank" rel="noreferrer" style={{ fontSize:11, color:"#2563EB", background:"#EFF6FF", padding:"3px 9px", borderRadius:5, textDecoration:"none" }}>LinkedIn →</a>}
+                    {selected.email && <span style={{ fontSize:11, color:"#6B7280", background:"#F3F4F6", padding:"3px 9px", borderRadius:5 }}>{selected.email}</span>}
+                  </div>
+                </div>
+                <div style={{ display:"flex", gap:6, alignItems:"center" }}>
+
+                  <button onClick={()=>setSelected(null)} style={{ fontSize:18, color:"#9CA3AF", background:"none", border:"none", cursor:"pointer" }}>×</button>
+                </div>
+              </div>
+            </div>
+
+            <div style={{ padding:20, display:"flex", flexDirection:"column", gap:16 }}>
+
+              {/* Stage */}
+              <div>
+                <Label>Stage</Label>
+                <div style={{ display:"flex", flexWrap:"wrap", gap:5, marginTop:6 }}>
+                  {STAGES.map(s => (
+                    <button key={s} onClick={()=>setStage(selected.id,s)} style={{ fontSize:11, padding:"4px 10px", borderRadius:20, border:`1.5px solid ${selected.stage===s?STAGE_COLOR[s]:"#E5E7EB"}`, background:selected.stage===s?`${STAGE_COLOR[s]}15`:"#fff", color:selected.stage===s?STAGE_COLOR[s]:"#6B7280", cursor:"pointer", fontWeight:selected.stage===s?600:400 }}>
+                      {s}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Email if missing */}
+              {!selected.email && (
+                <div>
+                  <Label>Work email</Label>
+                  <input type="email" placeholder="firstname@company.com" onChange={e=>updateContact(selected.id,{email:e.target.value})} style={inp} />
+                </div>
+              )}
+
+              {/* Notes */}
+              <div>
+                <Label>Notes</Label>
+                <textarea value={selected.notes||""} onChange={e=>updateContact(selected.id,{notes:e.target.value})} placeholder="Context, common connections..." style={{ ...inp, height:60, resize:"none" }} />
+              </div>
+
+              {/* Generate */}
+              <div>
+                <Label>Message</Label>
+                <div style={{ display:"flex", gap:8, marginTop:6 }}>
+                  <Btn primary onClick={()=>handleGenerateDraft(selected,false)} disabled={generating}>{generating?"⏳ Generating...":"✨ Generate email"}</Btn>
+                  <Btn outline onClick={()=>handleGenerateDraft(selected,true)} disabled={generating}>Follow-up</Btn>
+                </div>
+              </div>
+
+              {message && (
+                <div>
+                  <div style={{ background:"#F9FAFB", borderRadius:8, padding:12, fontSize:12, color:"#374151", lineHeight:1.7, whiteSpace:"pre-wrap", maxHeight:200, overflowY:"auto", border:"1px solid #E5E7EB", marginBottom:8 }}>
+                    {message}
+                  </div>
+                  <div style={{ display:"flex", gap:6, flexWrap:"wrap" }}>
+                    <Btn outline onClick={()=>navigator.clipboard?.writeText(message)}>↗ Copy</Btn>
+                    {selected.email && <Btn primary onClick={()=>handleSendDraft(selected,message)}>📧 Create Gmail draft</Btn>}
+                    {!selected.email && <span style={{ fontSize:11, color:"#B45309" }}>⚠️ Add email to create draft</span>}
+                  </div>
+                  {gmailStatus && <div style={{ fontSize:11, marginTop:6, fontWeight:500, color:gmailStatus.startsWith("✅")?"#059669":"#B45309" }}>{gmailStatus}</div>}
+                </div>
+              )}
+
+              {/* History */}
+              {(selected.messageHistory||[]).length > 0 && (
+                <div>
+                  <Label>History</Label>
+                  {selected.messageHistory.map((m,i) => (
+                    <div key={i} style={{ background:"#F9FAFB", borderRadius:6, padding:"7px 10px", marginTop:5, fontSize:11, border:"1px solid #E5E7EB" }}>
+                      <div style={{ display:"flex", justifyContent:"space-between", marginBottom:2 }}>
+                        <span style={{ fontWeight:600, color:"#9CA3AF", textTransform:"uppercase", fontSize:9 }}>{m.type}</span>
+                        <span style={{ color:"#9CA3AF" }}>{m.date}</span>
+                      </div>
+                      <div style={{ color:"#6B7280" }}>{m.preview}...</div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── APOLLO IMPORT MODAL ── */}
+      {showApollo && (
+        <Overlay onClose={()=>{setShowApollo(false);setApolloResults([]);setApolloStep("upload");}} title="📥 Import Apollo CSV">
+          <div style={{ display:"flex", flexDirection:"column", gap:12 }}>
+            {apolloStep === "upload" && (
+              <>
+                <div style={{ fontSize:12, color:"#6B7280" }}>
+                  Sur Apollo → sélectionne tes contacts → <b>Export</b> → <b>Export to CSV</b> → importe ici.<br/>
+                  Le secteur et le grade sont classifiés automatiquement par IA.
+                </div>
+                <label style={{ display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", gap:8, border:"2px dashed #E5E7EB", borderRadius:8, padding:"28px 16px", cursor:"pointer", background:"#F9FAFB" }}
+                  onMouseEnter={e=>e.currentTarget.style.borderColor="#2563EB"}
+                  onMouseLeave={e=>e.currentTarget.style.borderColor="#E5E7EB"}>
+                  <span style={{ fontSize:28 }}>📄</span>
+                  <span style={{ fontSize:13, fontWeight:600, color:"#374151" }}>Choisir le fichier CSV</span>
+                  <span style={{ fontSize:11, color:"#9CA3AF" }}>Format Apollo export standard</span>
+                  <input type="file" accept=".csv" onChange={handleCSVUpload} style={{ display:"none" }} />
+                </label>
+                {apolloParsing && (
+                  <div style={{ fontSize:12, color:"#6B7280", textAlign:"center", padding:"8px 0" }}>
+                    ⏳ Parsing CSV + classifying sectors with AI...
+                  </div>
+                )}
+                {apolloError && <div style={{ fontSize:12, color:"#B45309", background:"#FEF3C7", padding:"8px 10px", borderRadius:6 }}>{apolloError}</div>}
+              </>
+            )}
+
+            {apolloStep === "review" && apolloResults.length > 0 && (
+              <>
+                <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+                  <span style={{ fontSize:12, fontWeight:600 }}>{apolloResults.length} contacts trouvés · {apolloResults.filter(r=>r.selected).length} sélectionnés</span>
+                  <div style={{ display:"flex", gap:8 }}>
+                    <button onClick={()=>setApolloResults(p=>p.map(r=>({...r,selected:true})))} style={{ fontSize:11, color:"#2563EB", background:"none", border:"none", cursor:"pointer" }}>Tout</button>
+                    <button onClick={()=>setApolloResults(p=>p.map(r=>({...r,selected:false})))} style={{ fontSize:11, color:"#9CA3AF", background:"none", border:"none", cursor:"pointer" }}>Aucun</button>
+                  </div>
+                </div>
+                <div style={{ maxHeight:300, overflowY:"auto", display:"flex", flexDirection:"column", gap:4 }}>
+                  {apolloResults.map((r,i) => (
+                    <div key={i} onClick={()=>setApolloResults(p=>p.map((x,j)=>j===i?{...x,selected:!x.selected}:x))} style={{ display:"flex", alignItems:"center", gap:10, padding:"8px 11px", background:r.selected?"#EFF6FF":"#F9FAFB", border:`1px solid ${r.selected?"#BFDBFE":"#E5E7EB"}`, borderRadius:7, cursor:"pointer" }}>
+                      <div style={{ width:16, height:16, borderRadius:3, border:`2px solid ${r.selected?"#2563EB":"#D1D5DB"}`, background:r.selected?"#2563EB":"#fff", flexShrink:0, display:"flex", alignItems:"center", justifyContent:"center" }}>
+                        {r.selected && <span style={{ color:"#fff", fontSize:9, fontWeight:700 }}>✓</span>}
+                      </div>
+                      <div style={{ flex:1, minWidth:0 }}>
+                        <div style={{ fontSize:12, fontWeight:600 }}>{r.name}</div>
+                        <div style={{ fontSize:10, color:"#6B7280", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{r.role} · {r.company}</div>
+                      </div>
+                      <div style={{ display:"flex", gap:4, flexShrink:0 }}>
+                        <span style={{ fontSize:10, color:"#6B7280", background:"#F3F4F6", padding:"1px 6px", borderRadius:3 }}>{r.sector}</span>
+                        <span style={{ fontSize:10, color:GRADE_COLOR[r.grade]||"#6B7280", background:`${GRADE_COLOR[r.grade]||"#6B7280"}18`, padding:"1px 6px", borderRadius:3 }}>{r.grade}</span>
+                        {r.email && <span style={{ fontSize:10, color:"#059669", background:"#D1FAE5", padding:"1px 6px", borderRadius:3 }}>✉</span>}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <Btn primary onClick={importApollo} disabled={!apolloResults.filter(r=>r.selected).length}>
+                  Importer {apolloResults.filter(r=>r.selected).length} contacts →
+                </Btn>
+              </>
+            )}
+          </div>
+        </Overlay>
+      )}
+
+      {/* ── ADD CONTACT MODAL ── */}
+      {showAdd && (
+        <Overlay onClose={()=>setShowAdd(false)} title="Add contact">
+          <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
+            <div><Label>Full name *</Label><input value={newC.name} onChange={e=>setNewC(p=>({...p,name:e.target.value}))} placeholder="Sarah Chen" style={inp} autoFocus /></div>
+            <div><Label>Company *</Label><input value={newC.company} onChange={e=>setNewC(p=>({...p,company:e.target.value}))} placeholder="Arcmont Asset Management" style={inp} /></div>
+            <div><Label>Role</Label><input value={newC.role} onChange={e=>setNewC(p=>({...p,role:e.target.value}))} placeholder="Associate - Direct Lending" style={inp} /></div>
+            <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
+              <div><Label>Sector</Label><Sel value={newC.sector} onChange={e=>setNewC(p=>({...p,sector:e.target.value}))} options={SECTORS} /></div>
+              <div><Label>Grade</Label><Sel value={newC.grade} onChange={e=>setNewC(p=>({...p,grade:e.target.value}))} options={GRADES} /></div>
+            </div>
+            <div><Label>Email</Label><input value={newC.email} onChange={e=>setNewC(p=>({...p,email:e.target.value}))} placeholder="firstname@company.com" style={inp} /></div>
+            <div><Label>LinkedIn</Label><input value={newC.linkedin} onChange={e=>setNewC(p=>({...p,linkedin:e.target.value}))} placeholder="linkedin.com/in/..." style={inp} /></div>
+          </div>
+          <div style={{ display:"flex", gap:8, marginTop:14 }}>
+            <Btn outline onClick={()=>setShowAdd(false)}>Cancel</Btn>
+            <Btn primary onClick={addContact} disabled={!newC.name||!newC.company}>Add →</Btn>
+          </div>
+        </Overlay>
+      )}
+
+      {/* ── CALENDAR MODAL ── */}
+      {calShow && calContact && (
+        <Overlay onClose={()=>{setCalShow(false);setCalStatus("");}} title="📅 Schedule call" subtitle={`${calContact.name} · ${calContact.company}`}>
+          <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
+            <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
+              <div><Label>Date</Label><input type="date" value={calDate} onChange={e=>setCalDate(e.target.value)} style={inp} /></div>
+              <div><Label>Time</Label><input type="time" value={calTime} onChange={e=>setCalTime(e.target.value)} style={inp} /></div>
+            </div>
+            <div><Label>Platform</Label><Sel value={calPlatform} onChange={e=>setCalPlatform(e.target.value)} options={["Google Meet","Microsoft Teams","Zoom","Phone"]} /></div>
+            <Btn primary onClick={createCalEvent} disabled={!calDate}>Create event</Btn>
+            {calStatus && <div style={{ fontSize:12, color:calStatus.startsWith("✅")?"#059669":"#B45309" }}>{calStatus}</div>}
+          </div>
+        </Overlay>
+      )}
+    </div>
+  );
+}
+
+// ── MICRO COMPONENTS ──
+function Btn({ children, onClick, primary, outline, warning, disabled }) {
+  const bg = primary?"#111":warning?"#92400E":"#fff";
+  const color = primary?"#fff":warning?"#FCD34D":"#374151";
+  const border = (primary||warning)?"none":"1.5px solid #E5E7EB";
+  return (
+    <button onClick={onClick} disabled={disabled} style={{ padding:"7px 14px", fontSize:12, fontWeight:600, borderRadius:7, border, background:bg, color:disabled?"#9CA3AF":color, cursor:disabled?"not-allowed":"pointer", opacity:disabled?0.5:1, whiteSpace:"nowrap", transition:"all .1s" }}>
+      {children}
+    </button>
+  );
+}
+
+function Sel({ value, onChange, options, placeholder }) {
+  return (
+    <select value={value} onChange={onChange} style={{ ...inp, background:"#fff" }}>
+      {placeholder && <option value="">{placeholder}</option>}
+      {options.map(o=><option key={o} value={o}>{o||placeholder}</option>)}
+    </select>
+  );
+}
+
+function Label({ children }) {
+  return <div style={{ fontSize:11, fontWeight:600, color:"#6B7280", textTransform:"uppercase", letterSpacing:"0.4px", marginBottom:4 }}>{children}</div>;
+}
+
+function Overlay({ onClose, title, subtitle, children }) {
+  return (
+    <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.3)", zIndex:60, display:"flex", alignItems:"center", justifyContent:"center", padding:20 }} onClick={onClose}>
+      <div style={{ background:"#fff", borderRadius:12, width:"100%", maxWidth:520, maxHeight:"90vh", overflowY:"auto", boxShadow:"0 20px 60px rgba(0,0,0,0.12)", border:"1px solid #E5E7EB" }} onClick={e=>e.stopPropagation()}>
+        <div style={{ padding:"16px 20px 12px", borderBottom:"1px solid #E5E7EB", display:"flex", justifyContent:"space-between", alignItems:"flex-start" }}>
+          <div>
+            <div style={{ fontSize:15, fontWeight:700 }}>{title}</div>
+            {subtitle && <div style={{ fontSize:11, color:"#9CA3AF", marginTop:2 }}>{subtitle}</div>}
+          </div>
+          <button onClick={onClose} style={{ fontSize:18, color:"#9CA3AF", background:"none", border:"none", cursor:"pointer" }}>×</button>
+        </div>
+        <div style={{ padding:20 }}>{children}</div>
+      </div>
+    </div>
+  );
+}
+
+const inp = {
+  width:"100%", background:"#F9FAFB", border:"1.5px solid #E5E7EB",
+  borderRadius:7, padding:"8px 11px", fontSize:12, color:"#111",
+  outline:"none", boxSizing:"border-box",
+};
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>
