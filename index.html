@@ -7,11 +7,10 @@
   <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { font-family: 'DM Sans', system-ui, sans-serif; background: #F8FAFC; }
+    body { font-family: "DM Sans", system-ui, sans-serif; background: #F8FAFC; }
     select, input, textarea, button { font-family: inherit; }
     ::-webkit-scrollbar { width: 6px; height: 6px; }
     ::-webkit-scrollbar-track { background: #F1F5F9; }
@@ -28,7 +27,7 @@ const SECTORS = ["Private Debt", "Leveraged Finance", "Infrastructure Debt", "Re
 const GRADES = ["Analyst", "Associate", "VP", "Director", "MD"];
 // Google Sheets Web App URL — remplace après déploiement du Apps Script
 const SHEETS_URL = "https://script.google.com/macros/s/AKfycbx2YbBEMHpwJxdlQer3t9YmPDys6kZI0W21lLvNbGqlyi57h9n4eS22uYaxSb6U75Ythw/exec";
-const USE_SHEETS = true;
+const USE_SHEETS = SHEETS_URL !== "https://script.google.com/macros/s/AKfycbx2YbBEMHpwJxdlQer3t9YmPDys6kZI0W21lLvNbGqlyi57h9n4eS22uYaxSb6U75Ythw/exec";
 const STORAGE_KEY = "crm:v3"; // fallback localStorage si Sheets pas configuré
 const FOLLOWUP_DAYS = 7;
 
@@ -94,116 +93,34 @@ const parseApolloCsv = (text) => {
   }).filter(r => r.name.trim() && r.company);
 };
 
-// ── AI classify contacts using full context ──
+// ── AI classify contacts — via Apps Script proxy ──
 const classifyContacts = async (contacts) => {
-  const list = contacts.map((c,i) => `${i}. ${c.name} | ${c.role} | ${c.company} | industry: ${c.industry} | dept: ${c.departments} | keywords: ${c.keywords.slice(0,80)}`).join("\n");
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
+  const res = await fetch(SHEETS_URL, {
     method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model: "claude-sonnet-4-20250514", max_tokens: 1500,
-      messages: [{ role: "user", content: `Classify each person into a sector based on their role, company, industry, department and keywords. Return ONLY a JSON array of strings, same order, no markdown.
-
-Preferred sectors (use these if they clearly match):
-- "Private Debt" → Private Debt / Direct Lending / Credit funds / private credit
-- "Leveraged Finance" → LevFin / M&A / Investment Banking / advisory / corporate finance
-- "Infrastructure Debt" → Infrastructure / Project Finance / Energy / Utilities
-- "Restructuring" → Restructuring / Special Situations / Distressed / turnaround
-- "DCM" → Debt Capital Markets / Bonds / Fixed Income / capital markets
-
-If none of the above clearly match, create a SHORT custom sector name (2-3 words max) directly derived from their industry or keywords field. Examples: "Asset Management", "Private Equity", "Real Estate", "Hedge Fund", "Transaction Advisory", "Corporate Banking", "Risk Advisory".
-
-People:
-${list}
-
-Return: ["sector1","sector2",...]` }]
-    })
+    body: JSON.stringify({ action: "classify", contacts })
   });
-  const d = await res.json();
-  const text = d.content?.find(b=>b.type==="text")?.text || "[]";
-  return JSON.parse(text.replace(/```json|```/g,"").trim());
+  const data = await res.json();
+  return Array.isArray(data) ? data : contacts.map(() => "Other");
 };
 
-// ── Generate professional personalized email ──
+// ── Generate message — via Apps Script proxy ──
 const generateMsg = async (contact, isFollowUp = false) => {
-  const notesContext = contact.notes ? `Additional context from LinkedIn/notes: ${contact.notes}` : "";
-  
-  const prompt = isFollowUp
-    ? `Write a short follow-up email from Baptiste Mulder to ${contact.name} (${contact.role} at ${contact.company}).
-Context: Baptiste sent a first email ${FOLLOWUP_DAYS} days ago, no reply.
-${notesContext}
-
-Format:
-Subject: [subject line]
-[blank line]
-Dear ${contact.name.split(" ")[0]},
-[2-3 sentences: brief reference to previous email, polite nudge, renew call request]
-Best regards,
-Baptiste Mulder
-
-Rules: polite, not pushy, short. English only.`
-
-    : `Write a professional cold email from Baptiste Mulder to ${contact.name}, ${contact.role} at ${contact.company}.
-${notesContext}
-
-Format EXACTLY as follows — do not add or remove sections:
-
-Subject: Coffee chat about [their specific role/activity] at ${contact.company}
-
-Dear ${contact.name.split(" ")[0]},
-
-My name is Baptiste Mulder — Analyst at Magellan Asset Finance (Paris) where I work on asset-based mandates, primarily project finance and shipping. I am joining the LBS MFA programme in September 2026.
-
-[ONE sentence personalised to their specific role and work at ${contact.company} — use their title "${contact.role}" and what ${contact.company} does in ${contact.sector !== "Other" ? contact.sector : "finance"}${notesContext ? ". Use this context: " + contact.notes : ""}. Show genuine interest, be specific.]
-
-Would you be available for a short call in the coming days to discuss?
-
-Thank you very much in advance for your time.
-
-Best regards,
-Baptiste Mulder
-
-Rules:
-- Only personalise the bracketed sentence — keep all other lines exactly as written
-- The personalised sentence must reference something specific about their role or ${contact.company}
-- No CV mention, no bullet points, no fluff
-- English only`;
-
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
+  const res = await fetch(SHEETS_URL, {
     method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: 500, messages: [{ role: "user", content: prompt }] })
+    body: JSON.stringify({ action: "generateMsg", contact, isFollowUp })
   });
-  const d = await res.json();
-  let text = d.content?.find(b=>b.type==="text")?.text || "Error generating message.";
-  // Clean up formatting: max 1 consecutive blank line, trim trailing spaces
-  text = text
-    .split("\n")
-    .map(l => l.trimEnd())
-    .join("\n")
-    .replace(/\n{3,}/g, "\n\n")  // max 1 blank line between paragraphs
-    .trim();
-  return text;
+  const data = await res.json();
+  return data.message || "Error generating message.";
 };
 
-// ── Create Gmail draft via MCP ──
+// ── Create Gmail draft — via Apps Script proxy ──
 const createGmailDraft = async (contact, messageText) => {
-  const lines = messageText.split("\n");
-  const subjectLine = lines[0].toLowerCase().startsWith("subject:") ? lines[0].replace(/^subject:\s*/i,"").trim() : lines[0].trim();
-  const body = lines.slice(lines[0].toLowerCase().startsWith("subject:") ? 1 : 1).join("\n").trim();
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
+  const res = await fetch(SHEETS_URL, {
     method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model: "claude-sonnet-4-20250514", max_tokens: 300,
-      messages: [{ role: "user", content: `Create a Gmail draft email.
-To: ${contact.email}
-Subject: ${subjectLine}
-Body:
-${body}
-
-Use the gmail tool to create this draft now.` }],
-      mcp_servers: [{ type: "url", url: "https://gmail.mcp.claude.com/mcp", name: "gmail" }]
-    })
+    body: JSON.stringify({ action: "createDraft", contact, message: messageText })
   });
-  return res.ok;
+  const data = await res.json();
+  return data.ok === true;
 };
 
 function App() {
@@ -250,7 +167,7 @@ function App() {
     const load = async () => {
       if (USE_SHEETS) {
         try {
-          const res = await fetch(`${SHEETS_URL}?action=getContacts`, { mode: "cors" });
+          const res = await fetch(`${SHEETS_URL}?action=getContacts`);
           const data = await res.json();
           if (Array.isArray(data) && data.length) {
             setContacts(data);
@@ -312,7 +229,7 @@ function App() {
     if (!USE_SHEETS || !loaded) return;
     const interval = setInterval(async () => {
       try {
-        const res = await fetch(`${SHEETS_URL}?action=getContacts`, { mode: "cors" });
+        const res = await fetch(`${SHEETS_URL}?action=getContacts`);
         const data = await res.json();
         if (!Array.isArray(data)) return;
         // Only update contacts whose stage has changed (from Apps Script)
@@ -448,19 +365,22 @@ function App() {
     setShowApollo(false); setApolloResults([]); setApolloStep("upload");
   };
 
-  // ── Calendar ──
+  // ── Calendar — via Apps Script ──
   const createCalEvent = async () => {
     if (!calDate || !calContact) return;
     setCalStatus("Creating...");
-    const res = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: "claude-sonnet-4-20250514", max_tokens: 200,
-        messages: [{ role: "user", content: `Create a Google Calendar event: Title "Call - ${calContact.name} (${calContact.company})", Start: ${calDate}T${calTime}:00, Duration: 20 minutes, Platform: ${calPlatform}${calContact.email?`, Attendee: ${calContact.email}`:""}. Use the calendar tool.` }],
-        mcp_servers: [{ type: "url", url: "https://gmail.mcp.claude.com/mcp", name: "gmail" }]
-      })
-    });
-    setCalStatus(res.ok ? "✅ Event created" : "⚠️ Error");
+    try {
+      const res = await fetch(SHEETS_URL, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "createCalEvent",
+          name: calContact.name, company: calContact.company,
+          email: calContact.email, date: calDate, time: calTime, platform: calPlatform
+        })
+      });
+      const data = await res.json();
+      setCalStatus(data.ok ? "✅ Event created" : "⚠️ Error");
+    } catch(e) { setCalStatus("⚠️ Error"); }
   };
 
 
@@ -964,7 +884,7 @@ const inp = {
   outline:"none", boxSizing:"border-box",
 };
 
-    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+    ReactDOM.createRoot(document.getElementById("root")).render(<App />);
   </script>
 </body>
 </html>
