@@ -26,28 +26,18 @@ const STAGES = ["À contacter", "Draft créé", "Message envoyé", "Relance envo
 const SECTORS = ["Private Debt", "Leveraged Finance", "Infrastructure Debt", "Restructuring", "DCM", "Other"];
 const GRADES = ["Analyst", "Associate", "VP", "Director", "MD"];
 // Google Sheets Web App URL — remplace après déploiement du Apps Script
-const SHEETS_URL = "https://script.google.com/macros/s/AKfycbx2YbBEMHpwJxdlQer3t9YmPDys6kZI0W21lLvNbGqlyi57h9n4eS22uYaxSb6U75Ythw/exec";
+const SHEETS_URL = "https://withered-block-95b0.baptiste-mulderantunes.workers.dev";
 const USE_SHEETS = true;
 
 // CORS-safe call to Apps Script using no-cors iframe trick
 // Apps Script accepts GET requests cross-origin
-const sheetsCall = (params) => new Promise((resolve, reject) => {
+const sheetsCall = async (params) => {
   const url = SHEETS_URL + "?" + Object.entries(params).map(([k,v]) => 
     k + "=" + encodeURIComponent(typeof v === "object" ? JSON.stringify(v) : v)
   ).join("&");
-  const cbName = "cb_" + Date.now() + "_" + Math.random().toString(36).slice(2);
-  window[cbName] = (data) => {
-    delete window[cbName];
-    document.getElementById(cbName)?.remove();
-    resolve(data);
-  };
-  const script = document.createElement("script");
-  script.id = cbName;
-  script.src = url + "&callback=" + cbName;
-  script.onerror = () => { delete window[cbName]; reject(new Error("JSONP failed")); };
-  document.head.appendChild(script);
-  setTimeout(() => { delete window[cbName]; script.remove(); reject(new Error("Timeout")); }, 30000);
-});
+  const res = await fetch(url);
+  return res.json();
+};
 const STORAGE_KEY = "crm:v3"; // fallback localStorage si Sheets pas configuré
 const FOLLOWUP_DAYS = 7;
 
