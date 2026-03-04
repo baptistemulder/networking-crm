@@ -28,6 +28,26 @@ const GRADES = ["Analyst", "Associate", "VP", "Director", "MD"];
 // Google Sheets Web App URL — remplace après déploiement du Apps Script
 const SHEETS_URL = "https://script.google.com/macros/s/AKfycbx2YbBEMHpwJxdlQer3t9YmPDys6kZI0W21lLvNbGqlyi57h9n4eS22uYaxSb6U75Ythw/exec";
 const USE_SHEETS = true;
+
+// CORS-safe call to Apps Script using no-cors iframe trick
+// Apps Script accepts GET requests cross-origin
+const sheetsCall = (params) => new Promise((resolve, reject) => {
+  const url = SHEETS_URL + "?" + Object.entries(params).map(([k,v]) => 
+    k + "=" + encodeURIComponent(typeof v === "object" ? JSON.stringify(v) : v)
+  ).join("&");
+  const cbName = "cb_" + Date.now() + "_" + Math.random().toString(36).slice(2);
+  window[cbName] = (data) => {
+    delete window[cbName];
+    document.getElementById(cbName)?.remove();
+    resolve(data);
+  };
+  const script = document.createElement("script");
+  script.id = cbName;
+  script.src = url + "&callback=" + cbName;
+  script.onerror = () => { delete window[cbName]; reject(new Error("JSONP failed")); };
+  document.head.appendChild(script);
+  setTimeout(() => { delete window[cbName]; script.remove(); reject(new Error("Timeout")); }, 30000);
+});
 const STORAGE_KEY = "crm:v3"; // fallback localStorage si Sheets pas configuré
 const FOLLOWUP_DAYS = 7;
 
@@ -95,31 +115,19 @@ const parseApolloCsv = (text) => {
 
 // ── AI classify contacts — via Apps Script proxy ──
 const classifyContacts = async (contacts) => {
-  const res = await fetch(SHEETS_URL, {
-    method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ action: "classify", contacts })
-  });
-  const data = await res.json();
+  const data = await sheetsCall({ action: "classify", data: contacts });
   return Array.isArray(data) ? data : contacts.map(() => "Other");
 };
 
 // ── Generate message — via Apps Script proxy ──
 const generateMsg = async (contact, isFollowUp = false) => {
-  const res = await fetch(SHEETS_URL, {
-    method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ action: "generateMsg", contact, isFollowUp })
-  });
-  const data = await res.json();
+  const data = await sheetsCall({ action: "generateMsg", data: contact, isFollowUp: isFollowUp ? "1" : "0" });
   return data.message || "Error generating message.";
 };
 
 // ── Create Gmail draft — via Apps Script proxy ──
 const createGmailDraft = async (contact, messageText) => {
-  const res = await fetch(SHEETS_URL, {
-    method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ action: "createDraft", contact, message: messageText })
-  });
-  const data = await res.json();
+  const data = await sheetsCall({ action: "createDraft", data: contact, message: messageText });
   return data.ok === true;
 };
 
@@ -192,11 +200,7 @@ function App() {
   const syncContact = async (contact) => {
     if (!USE_SHEETS) return;
     try {
-      await fetch(SHEETS_URL, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "upsertContact", contact })
-      });
+await sheetsCall({ action: "upsertContact", data: contact });
     } catch(e) { console.warn("Sheets sync failed"); }
   };
 
@@ -204,11 +208,7 @@ function App() {
   const syncBatch = async (contactsList) => {
     if (!USE_SHEETS) return;
     try {
-      await fetch(SHEETS_URL, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "upsertBatch", contacts: contactsList })
-      });
+await sheetsCall({ action: "upsertBatch", data: contactsList });
     } catch(e) { console.warn("Sheets batch sync failed"); }
   };
 
@@ -216,11 +216,7 @@ function App() {
   const syncDelete = async (id) => {
     if (!USE_SHEETS) return;
     try {
-      await fetch(SHEETS_URL, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "deleteContact", id })
-      });
+await sheetsCall({ action: "deleteContact", data: id });
     } catch(e) { console.warn("Sheets delete sync failed"); }
   };
 
@@ -229,8 +225,7 @@ function App() {
     if (!USE_SHEETS || !loaded) return;
     const interval = setInterval(async () => {
       try {
-        const res = await fetch(`${SHEETS_URL}?action=getContacts`);
-        const data = await res.json();
+        const data = await sheetsCall({ action: "getContacts" });
         if (!Array.isArray(data)) return;
         // Only update contacts whose stage has changed (from Apps Script)
         setContacts(prev => prev.map(local => {
@@ -370,15 +365,7 @@ function App() {
     if (!calDate || !calContact) return;
     setCalStatus("Creating...");
     try {
-      const res = await fetch(SHEETS_URL, {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          action: "createCalEvent",
-          name: calContact.name, company: calContact.company,
-          email: calContact.email, date: calDate, time: calTime, platform: calPlatform
-        })
-      });
-      const data = await res.json();
+      const data = await sheetsCall({ action: "createCalEvent", name: calContact.name, company: calContact.company, email: calContact.email, date: calDate, time: calTime, platform: calPlatform });
       setCalStatus(data.ok ? "✅ Event created" : "⚠️ Error");
     } catch(e) { setCalStatus("⚠️ Error"); }
   };
