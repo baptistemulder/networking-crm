@@ -22,7 +22,7 @@
   <script type="text/babel">
 const { useState, useEffect, useCallback } = React;
 
-const STAGES = ["À contacter", "Draft créé", "Message envoyé", "Relance envoyée", "Répondu", "Call planifié", "Done"];
+const STAGES = ["À contacter", "Message envoyé", "Pas de réponse", "Relance envoyée", "Répondu", "Call planifié", "Done"];
 const SECTORS = ["Private Debt", "Leveraged Finance", "M&A Advisory", "Infrastructure Debt", "Infrastructure Equity", "Restructuring", "DCM", "ECM", "Private Equity", "Venture Capital", "Real Assets", "Hedge Fund", "Asset Management", "Corporate Banking", "Risk Advisory", "Audit & Accounting", "Management Consulting", "Tax & Legal", "Fintech", "Insurance", "Other"];
 const GRADES = ["Analyst", "Associate", "VP", "Director", "MD"];
 // Google Sheets Web App URL — remplace après déploiement du Apps Script
@@ -60,8 +60,7 @@ const addDays = (d, n) => new Date(new Date(d).getTime() + n * 86400000).toISOSt
 const isPast = (d) => d && new Date(d) <= new Date();
 
 const STAGE_COLOR = {
-  "À contacter": "#94A3B8", "Draft créé": "#6366F1", "Message envoyé": "#3B82F6", "Relance envoyée": "#F59E0B",
-  "Répondu": "#10B981", "Call planifié": "#8B5CF6", "Done": "#059669",
+  "À contacter": "#94A3B8", "Message envoyé": "#3B82F6", "Pas de réponse": "#F59E0B", "Relance envoyée": "#FB923C", "Répondu": "#10B981", "Call planifié": "#8B5CF6", "Done": "#059669",
 };
 const GRADE_COLOR = { Analyst: "#3B82F6", Associate: "#8B5CF6", VP: "#EC4899", Director: "#F59E0B", MD: "#EF4444" };
 
@@ -168,8 +167,8 @@ function App() {
   const [selected, setSelected] = useState(null);
   const [selectedIds, setSelectedIds] = useState(new Set());
   const [filterSector, setFilterSector] = useState("");
-  const [filterStage, setFilterStage] = useState("");
   const [filterGrade, setFilterGrade] = useState("");
+  const [stageTab, setStageTab] = useState("all");
 
   // Add contact
   const [showAdd, setShowAdd] = useState(false);
@@ -249,6 +248,17 @@ function App() {
     } catch(e) { console.warn("Sheets delete sync failed"); }
   };
 
+  // ── Auto-upgrade "Message envoyé" → "Pas de réponse" after 7 days ──
+  useEffect(() => {
+    if (!loaded) return;
+    const today = todayStr();
+    contacts.forEach(c => {
+      if (c.stage === "Message envoyé" && c.followUpDate && c.followUpDate <= today) {
+        updateContact(c.id, { stage: "Pas de réponse" });
+      }
+    });
+  }, [loaded]);
+
   // ── Poll Sheets for updates (reply detection by Apps Script) every 60s ──
   useEffect(() => {
     if (!USE_SHEETS || !loaded) return;
@@ -287,7 +297,7 @@ function App() {
 
   const setStage = useCallback((id, stage) => {
     const patch = { stage, lastContact: todayStr() };
-    if (stage === "Message envoyé" || stage === "Draft créé" || stage === "Relance envoyée") patch.followUpDate = addDays(todayStr(), FOLLOWUP_DAYS);
+    if (stage === "Message envoyé" || stage === "Relance envoyée") patch.followUpDate = addDays(todayStr(), FOLLOWUP_DAYS);
     updateContact(id, patch);
     if (stage === "Call planifié") {
       setCalContact(contacts.find(c => c.id === id));
@@ -297,12 +307,12 @@ function App() {
 
   const filtered = contacts.filter(c => {
     if (filterSector && c.sector !== filterSector) return false;
-    if (filterStage && c.stage !== filterStage) return false;
     if (filterGrade && c.grade !== filterGrade) return false;
+    if (stageTab !== "all" && c.stage !== stageTab) return false;
     return true;
   });
 
-  const due = contacts.filter(c => (c.stage === "Message envoyé" || c.stage === "Draft créé" || c.stage === "Relance envoyée") && isPast(c.followUpDate));
+  const due = contacts.filter(c => c.stage === "Pas de réponse");
 
   const toggleSelect = (id) => {
     setSelectedIds(p => { const n = new Set(p); n.has(id) ? n.delete(id) : n.add(id); return n; });
@@ -330,7 +340,7 @@ function App() {
     if (result.ok) {
       setMessage(result.message);
       setGmailStatus("✅ Draft created in Gmail");
-      setStage(contact.id, "Draft créé");
+      setStage(contact.id, "Message envoyé");
       updateContact(contact.id, { messageHistory: [...(contact.messageHistory||[]), { date: todayStr(), type: isFollowUp ? "followup" : "initial", preview: result.message.slice(0,80) }] });
     } else {
       setGmailStatus("⚠️ Gmail error — check Apps Script logs");
@@ -348,7 +358,7 @@ function App() {
       const msg = await generateMsg(contact, false);
       await createGmailDraft(contact, false);
       updateContact(contact.id, {
-        stage: "Draft créé",
+        stage: "Message envoyé",
         lastContact: todayStr(),
         followUpDate: addDays(todayStr(), FOLLOWUP_DAYS),
         messageHistory: [...(contact.messageHistory||[]), { date: todayStr(), type: "initial", preview: msg.slice(0,80) }]
@@ -413,7 +423,7 @@ function App() {
   // This triggers a message in the Claude chat — Claude has direct Gmail MCP access
   const checkReplies = () => {
     const sentContacts = contacts.filter(c =>
-      ["Draft créé", "Message envoyé", "Relance envoyée"].includes(c.stage) && c.email
+      ["Message envoyé", "Relance envoyée"].includes(c.stage) && c.email
     );
     if (!sentContacts.length) { setRepliesStatus("No contacts to check."); return; }
 
@@ -503,9 +513,8 @@ function App() {
       <div style={{ background:"#fff", borderBottom:"1px solid #E5E7EB", padding:"8px 24px" }}>
         <div style={{ maxWidth:1200, margin:"0 auto", display:"flex", gap:8, alignItems:"center" }}>
           <Sel value={filterSector} onChange={e=>setFilterSector(e.target.value)} options={["", ...Array.from(new Set(contacts.map(c=>c.sector).filter(Boolean))).sort()]} placeholder="All sectors" />
-          <Sel value={filterStage} onChange={e=>setFilterStage(e.target.value)} options={["", ...STAGES]} placeholder="All stages" />
           <Sel value={filterGrade} onChange={e=>setFilterGrade(e.target.value)} options={["", ...GRADES]} placeholder="All grades" />
-          {(filterSector||filterStage||filterGrade) && <button onClick={()=>{setFilterSector("");setFilterStage("");setFilterGrade("");}} style={{fontSize:11,color:"#9CA3AF",background:"none",border:"none",cursor:"pointer"}}>× Clear</button>}
+          {(filterSector||filterGrade) && <button onClick={()=>{setFilterSector("");setFilterGrade("");}} style={{fontSize:11,color:"#9CA3AF",background:"none",border:"none",cursor:"pointer"}}>× Clear</button>}
           <span style={{ marginLeft:"auto", fontSize:11, color:"#9CA3AF" }}>{filtered.length} contacts{selectedIds.size>0?` · ${selectedIds.size} selected`:""}</span>
         </div>
       </div>
@@ -514,44 +523,55 @@ function App() {
 
         {/* CONTACTS */}
         {tab === "contacts" && (
-          <div style={{ background:"#fff", borderRadius:10, border:"1px solid #E5E7EB", overflow:"hidden" }}>
-            <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13 }}>
-              <thead>
-                <tr style={{ borderBottom:"1px solid #E5E7EB", background:"#F9FAFB" }}>
-                  <th style={{ padding:"9px 14px", width:36 }}>
-                    <input type="checkbox" checked={selectedIds.size===filtered.length&&filtered.length>0} onChange={toggleSelectAll} style={{ cursor:"pointer" }} />
-                  </th>
-                  {["Name","Company","Role","Grade","Sector","Stage","Follow-up",""].map(h=>(
-                    <th key={h} style={{ padding:"9px 14px", textAlign:"left", fontSize:10, fontWeight:600, color:"#6B7280", textTransform:"uppercase", letterSpacing:"0.4px" }}>{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {filtered.map((c,i) => (
-                  <tr key={c.id} onClick={()=>{setSelected(c);setMessage("");setGmailStatus("");}} style={{ borderBottom:"1px solid #F3F4F6", background: selectedIds.has(c.id)?"#EFF6FF": i%2===0?"#fff":"#FAFAFA", cursor:"pointer" }}>
-                    <td style={{ padding:"10px 14px" }} onClick={e=>e.stopPropagation()}>
-                      <input type="checkbox" checked={selectedIds.has(c.id)} onChange={()=>toggleSelect(c.id)} style={{ cursor:"pointer" }} />
-                    </td>
-                    <td style={{ padding:"10px 14px", fontWeight:600 }}>{c.name}</td>
-                    <td style={{ padding:"10px 14px", color:"#374151", maxWidth:140, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{c.company}</td>
-                    <td style={{ padding:"10px 14px", color:"#6B7280", maxWidth:140, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{c.role}</td>
-                    <td style={{ padding:"10px 14px" }}>
-                      <span style={{ fontSize:11, fontWeight:600, color:GRADE_COLOR[c.grade]||"#6B7280", background:`${GRADE_COLOR[c.grade]||"#6B7280"}15`, padding:"2px 7px", borderRadius:4 }}>{c.grade}</span>
-                    </td>
-                    <td style={{ padding:"10px 14px", fontSize:11, color:"#6B7280" }}>{c.sector}</td>
-                    <td style={{ padding:"10px 14px" }}>
-                      <span style={{ fontSize:11, fontWeight:600, color:STAGE_COLOR[c.stage]||"#6B7280", background:`${STAGE_COLOR[c.stage]||"#6B7280"}18`, padding:"3px 8px", borderRadius:20 }}>{c.stage}</span>
-                    </td>
-                    <td style={{ padding:"10px 14px", fontSize:11, color:isPast(c.followUpDate)?"#B45309":"#9CA3AF" }}>
-                      {c.followUpDate?(isPast(c.followUpDate)?`🔔 ${c.followUpDate}`:c.followUpDate):"—"}
-                    </td>
-                    <td style={{ padding:"10px 14px", textAlign:"right" }}>
-                      <button onClick={(e)=>{e.stopPropagation();deleteContact(c.id);}} style={{ fontSize:14, color:"#D1D5DB", background:"none", border:"none", cursor:"pointer", lineHeight:1, padding:"2px 4px" }} title="Delete" onMouseEnter={e=>e.currentTarget.style.color="#EF4444"} onMouseLeave={e=>e.currentTarget.style.color="#D1D5DB"}>✕</button>
-                    </td>
+          <div>
+            {/* Stage sub-tabs */}
+            <div style={{ display:"flex", gap:0, marginBottom:16, background:"#fff", borderRadius:10, border:"1px solid #E5E7EB", overflow:"hidden" }}>
+              {[["all", "All", contacts.length], ...STAGES.map(s => [s, s, contacts.filter(c=>c.stage===s).length])].map(([key, label, count]) => (
+                <button key={key} onClick={()=>setStageTab(key)} style={{ flex:1, padding:"10px 8px", fontSize:11, fontWeight:stageTab===key?700:400, color:stageTab===key?(key==="all"?"#111":STAGE_COLOR[key]||"#111"):"#6B7280", background:stageTab===key?(key==="all"?"#F8FAFC":`${STAGE_COLOR[key]}10`):"#fff", border:"none", borderBottom:stageTab===key?`2px solid ${key==="all"?"#111":STAGE_COLOR[key]||"#111"}`:"2px solid transparent", cursor:"pointer", whiteSpace:"nowrap" }}>
+                  {label} <span style={{ fontSize:10, opacity:0.7 }}>({count})</span>
+                </button>
+              ))}
+            </div>
+            {/* Table */}
+            <div style={{ background:"#fff", borderRadius:10, border:"1px solid #E5E7EB", overflow:"hidden" }}>
+              <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13 }}>
+                <thead>
+                  <tr style={{ borderBottom:"1px solid #E5E7EB", background:"#F9FAFB" }}>
+                    <th style={{ padding:"9px 14px", width:36 }}>
+                      <input type="checkbox" checked={selectedIds.size===filtered.length&&filtered.length>0} onChange={toggleSelectAll} style={{ cursor:"pointer" }} />
+                    </th>
+                    {["Name","Company","Role","Grade","Sector","Stage","Follow-up",""].map(h=>(
+                      <th key={h} style={{ padding:"9px 14px", textAlign:"left", fontSize:10, fontWeight:600, color:"#6B7280", textTransform:"uppercase", letterSpacing:"0.4px" }}>{h}</th>
+                    ))}
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {filtered.map((c,i) => (
+                    <tr key={c.id} onClick={()=>{setSelected(c);setMessage("");setGmailStatus("");}} style={{ borderBottom:"1px solid #F3F4F6", background: selectedIds.has(c.id)?"#EFF6FF": i%2===0?"#fff":"#FAFAFA", cursor:"pointer" }}>
+                      <td style={{ padding:"10px 14px" }} onClick={e=>e.stopPropagation()}>
+                        <input type="checkbox" checked={selectedIds.has(c.id)} onChange={()=>toggleSelect(c.id)} style={{ cursor:"pointer" }} />
+                      </td>
+                      <td style={{ padding:"10px 14px", fontWeight:600 }}>{c.name}</td>
+                      <td style={{ padding:"10px 14px", color:"#374151", maxWidth:140, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{c.company}</td>
+                      <td style={{ padding:"10px 14px", color:"#6B7280", maxWidth:140, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{c.role}</td>
+                      <td style={{ padding:"10px 14px" }}>
+                        <span style={{ fontSize:11, fontWeight:600, color:GRADE_COLOR[c.grade]||"#6B7280", background:`${GRADE_COLOR[c.grade]||"#6B7280"}15`, padding:"2px 7px", borderRadius:4 }}>{c.grade}</span>
+                      </td>
+                      <td style={{ padding:"10px 14px", fontSize:11, color:"#6B7280" }}>{c.sector}</td>
+                      <td style={{ padding:"10px 14px" }}>
+                        <span style={{ fontSize:11, fontWeight:600, color:STAGE_COLOR[c.stage]||"#6B7280", background:`${STAGE_COLOR[c.stage]||"#6B7280"}18`, padding:"3px 8px", borderRadius:20 }}>{c.stage}</span>
+                      </td>
+                      <td style={{ padding:"10px 14px", fontSize:11, color:isPast(c.followUpDate)?"#B45309":"#9CA3AF" }}>
+                        {c.followUpDate?(isPast(c.followUpDate)?`🔔 ${c.followUpDate}`:c.followUpDate):"—"}
+                      </td>
+                      <td style={{ padding:"10px 14px", textAlign:"right" }}>
+                        <button onClick={(e)=>{e.stopPropagation();deleteContact(c.id);}} style={{ fontSize:14, color:"#D1D5DB", background:"none", border:"none", cursor:"pointer", lineHeight:1, padding:"2px 4px" }} title="Delete" onMouseEnter={e=>e.currentTarget.style.color="#EF4444"} onMouseLeave={e=>e.currentTarget.style.color="#D1D5DB"}>✕</button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </div>
         )}
 
@@ -591,25 +611,44 @@ function App() {
             {due.length === 0 ? (
               <div style={{ background:"#fff", borderRadius:10, border:"1px solid #E5E7EB", padding:48, textAlign:"center" }}>
                 <div style={{ fontSize:28, marginBottom:8 }}>🎉</div>
-                <div style={{ fontWeight:600, color:"#6B7280" }}>No follow-ups due</div>
+                <div style={{ fontWeight:600, color:"#6B7280" }}>No follow-ups pending</div>
               </div>
-            ) : due.map(c => (
-              <div key={c.id} style={{ background:"#fff", borderRadius:10, border:"1px solid #FDE68A", padding:"14px 18px", marginBottom:10, display:"flex", alignItems:"center", justifyContent:"space-between", gap:16 }}>
-                <div>
-                  <div style={{ fontWeight:700, fontSize:14 }}>{c.name}</div>
-                  <div style={{ fontSize:12, color:"#6B7280", marginTop:2 }}>{c.role} · {c.company}</div>
-                  <div style={{ fontSize:11, color:"#B45309", marginTop:4 }}>Due since {c.followUpDate}</div>
+            ) : (
+              <>
+                <div style={{ fontSize:12, color:"#6B7280", marginBottom:12, fontWeight:500 }}>{due.length} contact{due.length>1?"s":""} without reply after 7 days</div>
+                <div style={{ background:"#fff", borderRadius:10, border:"1px solid #E5E7EB", overflow:"hidden" }}>
+                  <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13 }}>
+                    <thead>
+                      <tr style={{ borderBottom:"1px solid #E5E7EB", background:"#F9FAFB" }}>
+                        {["Name","Company","Role","Sector","Sent",""].map(h=>(
+                          <th key={h} style={{ padding:"9px 14px", textAlign:"left", fontSize:10, fontWeight:600, color:"#6B7280", textTransform:"uppercase", letterSpacing:"0.4px" }}>{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {due.map((c,i) => (
+                        <tr key={c.id} onClick={()=>{setSelected(c);setMessage("");setGmailStatus("");}} style={{ borderBottom:"1px solid #F3F4F6", background:i%2===0?"#fff":"#FAFAFA", cursor:"pointer" }}>
+                          <td style={{ padding:"10px 14px", fontWeight:600 }}>{c.name}</td>
+                          <td style={{ padding:"10px 14px", color:"#374151" }}>{c.company}</td>
+                          <td style={{ padding:"10px 14px", color:"#6B7280", maxWidth:140, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{c.role}</td>
+                          <td style={{ padding:"10px 14px", fontSize:11, color:"#6B7280" }}>{c.sector}</td>
+                          <td style={{ padding:"10px 14px", fontSize:11, color:"#9CA3AF" }}>{c.lastContact||"—"}</td>
+                          <td style={{ padding:"10px 14px", textAlign:"right" }}>
+                            <div style={{ display:"flex", gap:6, justifyContent:"flex-end" }}>
+                              <Btn warning onClick={async(e)=>{
+                                e.stopPropagation();
+                                if (c.email) { await createGmailDraft(c, true); updateContact(c.id,{stage:"Relance envoyée",lastContact:todayStr(),followUpDate:addDays(todayStr(),7)}); }
+                              }}>⚡ Follow-up draft</Btn>
+                              <Btn outline onClick={(e)=>{e.stopPropagation();updateContact(c.id,{stage:"Répondu",lastContact:todayStr()});}}>✓ Replied</Btn>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
                 </div>
-                <div style={{ display:"flex", gap:8 }}>
-                  <Btn outline onClick={()=>{setSelected(c);setMessage("");setGmailStatus("");setTab("contacts");}}>Open</Btn>
-                  <Btn warning onClick={async()=>{
-                    if (c.email) { await createGmailDraft(c, true); setStage(c.id,"Relance envoyée"); }
-                    else { setSelected(c); setGmailStatus("⚠️ No email — copy manually"); setTab("contacts"); }
-                  }}>⚡ 1-click follow-up</Btn>
-                  <Btn outline onClick={()=>setStage(c.id,"Répondu")}>✓ Replied</Btn>
-                </div>
-              </div>
-            ))}
+              </>
+            )}
           </div>
         )}
 
@@ -713,35 +752,35 @@ function App() {
                 <textarea value={selected.notes||""} onChange={e=>updateContact(selected.id,{notes:e.target.value})} placeholder="Context, common connections..." style={{ ...inp, height:60, resize:"none" }} />
               </div>
 
-              {/* Generate */}
+              {/* Actions */}
               <div>
-                <Label>Message</Label>
+                <Label>Actions</Label>
                 <div style={{ display:"flex", gap:8, marginTop:6, flexWrap:"wrap" }}>
-                  <Btn primary onClick={()=>handleGenerateDraft(selected,false)} disabled={generating}>{generating?"⏳ Generating...":"✨ Generate email"}</Btn>
-                  <Btn outline onClick={()=>handleGenerateDraft(selected,true)} disabled={generating}>✉ Generate follow-up</Btn>
-                  {selected.email && (
-                    <Btn warning onClick={async()=>{
-                      setGenerating(true); setMessage(""); setGmailStatus("");
-                      const result = await createGmailDraft(selected, true);
-                      setGmailStatus(result.ok ? "✅ Follow-up draft created in Gmail" : "⚠️ Error");
-                      updateContact(selected.id, { stage:"Relance envoyée", lastContact:todayStr(), followUpDate:addDays(todayStr(),7), messageHistory:[...(selected.messageHistory||[]),{date:todayStr(),type:"followup",preview:"Follow-up sent"}] });
-                      setGenerating(false);
-                    }} disabled={generating}>⚡ 1-click follow-up draft</Btn>
+                  {selected.email ? (
+                    <>
+                      <Btn primary onClick={()=>handleSendDraft(selected,false)} disabled={generating}>
+                        {generating?"⏳ Creating...":"📧 Create Gmail draft"}
+                      </Btn>
+                      <Btn outline onClick={()=>handleSendDraft(selected,true)} disabled={generating}>
+                        ✉ Follow-up draft
+                      </Btn>
+                    </>
+                  ) : (
+                    <span style={{ fontSize:11, color:"#B45309" }}>⚠️ Add email to create draft</span>
                   )}
                 </div>
+                {gmailStatus && <div style={{ fontSize:11, marginTop:8, fontWeight:500, color:gmailStatus.startsWith("✅")?"#059669":"#B45309" }}>{gmailStatus}</div>}
               </div>
 
               {message && (
                 <div>
-                  <div style={{ background:"#F9FAFB", borderRadius:8, padding:12, fontSize:12, color:"#374151", lineHeight:1.7, whiteSpace:"pre-wrap", maxHeight:200, overflowY:"auto", border:"1px solid #E5E7EB", marginBottom:8 }}>
+                  <Label>Preview</Label>
+                  <div style={{ background:"#F9FAFB", borderRadius:8, padding:12, fontSize:12, color:"#374151", lineHeight:1.7, whiteSpace:"pre-wrap", maxHeight:220, overflowY:"auto", border:"1px solid #E5E7EB", marginTop:6 }}>
                     {message}
                   </div>
-                  <div style={{ display:"flex", gap:6, flexWrap:"wrap" }}>
+                  <div style={{ marginTop:6 }}>
                     <Btn outline onClick={()=>navigator.clipboard?.writeText(message)}>↗ Copy</Btn>
-                    {selected.email && <Btn primary onClick={()=>handleSendDraft(selected,false)}>📧 Create Gmail draft</Btn>}
-                    {!selected.email && <span style={{ fontSize:11, color:"#B45309" }}>⚠️ Add email to create draft</span>}
                   </div>
-                  {gmailStatus && <div style={{ fontSize:11, marginTop:6, fontWeight:500, color:gmailStatus.startsWith("✅")?"#059669":"#B45309" }}>{gmailStatus}</div>}
                 </div>
               )}
 
