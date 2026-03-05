@@ -342,8 +342,12 @@ function App() {
       setMessage(result.message);
       const newStage = isFollowUp ? "Relance envoyée" : "Message envoyé";
       setGmailStatus(`✅ Draft created in Gmail → ${newStage}`);
-      setStage(contact.id, newStage);
-      const patch = { messageHistory: [...(contact.messageHistory||[]), { date: todayStr(), type: isFollowUp ? "followup" : "initial", preview: result.message.slice(0,80) }] };
+      const patch = {
+        stage: newStage,
+        lastContact: todayStr(),
+        followUpDate: addDays(todayStr(), FOLLOWUP_DAYS),
+        messageHistory: [...(contact.messageHistory||[]), { date: todayStr(), type: isFollowUp ? "followup" : "initial", preview: result.message.slice(0,80) }]
+      };
       if (!isFollowUp && result.messageId) patch.gmailMessageId = result.messageId;
       updateContact(contact.id, patch);
     } else {
@@ -488,15 +492,18 @@ function App() {
           <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
             {bulkProgress && <span style={{ fontSize: 11, color: bulkProgress.startsWith("✅")?"#059669":bulkProgress.startsWith("⚠️")?"#B45309":"#6B7280", fontWeight: 500 }}>{bulkProgress}</span>}
             {due.length > 0 && <button onClick={() => setTab("followups")} style={{ fontSize: 11, fontWeight: 600, color: "#B45309", background: "#FEF3C7", border: "1px solid #FDE68A", padding: "4px 10px", borderRadius: 6, cursor: "pointer" }}>🔔 {due.length} follow-up{due.length>1?"s":""} due</button>}
-            {selectedIds.size > 0 && (
-              <Btn warning onClick={handleBulkDraft} disabled={bulkGenerating || selectedWithEmail.length === 0}>
-                {bulkGenerating ? "⏳ Generating..." : `📧 Create ${selectedWithEmail.length} Gmail draft${selectedWithEmail.length>1?"s":""}`}
-              </Btn>
-            )}
             <Btn outline onClick={() => exportCSV(filtered)}>↓ CSV</Btn>
             <Btn outline onClick={() => { setShowApollo(true); setApolloResults([]); setApolloError(""); setApolloStep("upload"); }}>📥 Import Apollo</Btn>
-            <Btn outline onClick={() => { const c = selected || contacts.find(x => selectedIds.has(x.id) && x.email); if (c) handleSendDraft(c, true); }} disabled={generating || !(selected?.email || contacts.some(x => selectedIds.has(x.id) && x.email))}>✉ Follow-up draft</Btn>
-            <Btn primary onClick={() => { const c = selected || contacts.find(x => selectedIds.has(x.id) && x.email); if (c) handleSendDraft(c, false); }} disabled={generating || !(selected?.email || contacts.some(x => selectedIds.has(x.id) && x.email))}>📧 Gmail draft</Btn>
+            {selectedIds.size > 1 ? (
+              <Btn warning onClick={handleBulkDraft} disabled={bulkGenerating || selectedWithEmail.length === 0}>
+                {bulkGenerating ? "⏳ Generating..." : `📧 ${selectedWithEmail.length} Gmail drafts`}
+              </Btn>
+            ) : (
+              <>
+                <Btn outline onClick={() => { const c = selected || contacts.find(x => selectedIds.has(x.id) && x.email); if (c) handleSendDraft(c, true); }} disabled={generating || !(selected?.email || contacts.some(x => selectedIds.has(x.id) && x.email))}>✉ Follow-up draft</Btn>
+                <Btn primary onClick={() => { const c = selected || contacts.find(x => selectedIds.has(x.id) && x.email); if (c) handleSendDraft(c, false); }} disabled={generating || !(selected?.email || contacts.some(x => selectedIds.has(x.id) && x.email))}>📧 Gmail draft</Btn>
+              </>
+            )}
             <Btn primary onClick={() => setShowAdd(true)}>+ Add</Btn>
           </div>
         </div>
