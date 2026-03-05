@@ -36,6 +36,15 @@ const sheetsCall = async (params) => {
   const res = await fetch(url);
   return res.json();
 };
+
+const sheetsPost = async (action, data) => {
+  const res = await fetch(SHEETS_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action, data })
+  });
+  return res.json();
+};
 const STORAGE_KEY = "crm:v3"; // fallback localStorage si Sheets pas configuré
 const FOLLOWUP_DAYS = 7;
 
@@ -218,7 +227,7 @@ function App() {
   const syncContact = async (contact) => {
     if (!USE_SHEETS) return;
     try {
-      await sheetsCall({ action: "upsertContact", data: contact });
+      await sheetsPost("upsertContact", contact);
     } catch(e) { console.warn("Sheets sync failed"); }
   };
 
@@ -226,7 +235,7 @@ function App() {
   const syncBatch = async (contactsList) => {
     if (!USE_SHEETS) return;
     try {
-      await sheetsCall({ action: "upsertBatch", data: contactsList });
+      await sheetsPost("upsertBatch", contactsList);
     } catch(e) { console.warn("Sheets batch sync failed"); }
   };
 
@@ -234,7 +243,7 @@ function App() {
   const syncDelete = async (id) => {
     if (!USE_SHEETS) return;
     try {
-      await sheetsCall({ action: "deleteContact", data: id });
+      await sheetsPost("deleteContact", id);
     } catch(e) { console.warn("Sheets delete sync failed"); }
   };
 
