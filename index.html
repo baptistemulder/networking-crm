@@ -106,16 +106,34 @@ const parseApolloCsv = (text) => {
     const email = get(row, "email", "work email");
     const linkedin = get(row, "person linkedin url", "linkedin url", "linkedin").replace(/https?:\/\//,"");
     const industry = get(row, "industry");
-    const keywords = get(row, "keywords").slice(0, 120);
+    const keywords = get(row, "keywords").slice(0, 60);
     const departments = get(row, "departments", "sub departments");
     return { name, company, role, email, linkedin, grade, industry, keywords, departments, selected: true, sector: "" };
   }).filter(r => r.name.trim() && r.company);
 };
 
-// ── AI classify contacts — via Apps Script proxy ──
+// ── AI classify contacts — chunked via Apps Script proxy ──
 const classifyContacts = async (contacts) => {
-  const data = await sheetsCall({ action: "classify", data: contacts });
-  return Array.isArray(data) ? data : contacts.map(() => "Other");
+  // Strip heavy fields before sending, keep only what's needed for classification
+  const slim = contacts.map(c => ({
+    name: c.name,
+    role: c.role,
+    company: c.company,
+    industry: (c.industry||"").slice(0, 40),
+    departments: (c.departments||"").slice(0, 40),
+    keywords: (c.keywords||"").slice(0, 60),
+  }));
+
+  // Chunk into groups of 10 to avoid URL length limits
+  const CHUNK = 10;
+  const results = [];
+  for (let i = 0; i < slim.length; i += CHUNK) {
+    const chunk = slim.slice(i, i + CHUNK);
+    const data = await sheetsCall({ action: "classify", data: chunk });
+    const sectors = Array.isArray(data) ? data : chunk.map(() => "Other");
+    results.push(...sectors);
+  }
+  return results;
 };
 
 // ── Generate message — via Apps Script proxy ──
