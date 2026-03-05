@@ -142,10 +142,10 @@ const generateMsg = async (contact, isFollowUp = false) => {
   return data.message || "Error generating message.";
 };
 
-// ── Create Gmail draft — via Apps Script proxy ──
-const createGmailDraft = async (contact, messageText) => {
-  const data = await sheetsCall({ action: "createDraft", data: contact, message: messageText });
-  return data.ok === true;
+// ── Create Gmail draft — Apps Script generates + creates in one call ──
+const createGmailDraft = async (contact, isFollowUp = false) => {
+  const data = await sheetsCall({ action: "createDraft", data: contact, isFollowUp: isFollowUp ? "1" : "0" });
+  return { ok: data.ok === true, message: data.message || "" };
 };
 
 function App() {
@@ -309,12 +309,15 @@ function App() {
     setGenerating(false);
   };
 
-  const handleSendDraft = async (contact, msgText) => {
+  const handleSendDraft = async (contact, isFollowUp = false) => {
     if (!contact.email) { setGmailStatus("⚠️ No email — add it first"); return; }
     setGmailStatus("Creating draft...");
-    const ok = await createGmailDraft(contact, msgText);
-    setGmailStatus(ok ? "✅ Draft created in Gmail" : "⚠️ Gmail error — copy manually");
-    if (ok) setStage(contact.id, "Draft créé");
+    const result = await createGmailDraft(contact, isFollowUp);
+    setGmailStatus(result.ok ? "✅ Draft created in Gmail" : "⚠️ Gmail error — copy manually");
+    if (result.ok) {
+      setMessage(result.message);
+      setStage(contact.id, "Draft créé");
+    }
   };
 
   // ── Bulk: generate + send all selected ──
@@ -326,7 +329,7 @@ function App() {
     for (const contact of targets) {
       setBulkProgress(`⏳ ${done}/${targets.length} — generating for ${contact.name}...`);
       const msg = await generateMsg(contact, false);
-      await createGmailDraft(contact, msg);
+      await createGmailDraft(contact, false);
       updateContact(contact.id, {
         stage: "Draft créé",
         lastContact: todayStr(),
@@ -581,9 +584,8 @@ function App() {
                 <div style={{ display:"flex", gap:8 }}>
                   <Btn outline onClick={()=>{setSelected(c);setMessage("");setGmailStatus("");setTab("contacts");}}>Open</Btn>
                   <Btn warning onClick={async()=>{
-                    const msg = await generateMsg(c, true);
-                    if (c.email) { await createGmailDraft(c, msg); setStage(c.id,"Relance envoyée"); }
-                    else { setSelected(c); setMessage(msg); setGmailStatus("⚠️ No email — copy manually"); setTab("contacts"); }
+                    if (c.email) { await createGmailDraft(c, true); setStage(c.id,"Relance envoyée"); }
+                    else { setSelected(c); setGmailStatus("⚠️ No email — copy manually"); setTab("contacts"); }
                   }}>⚡ 1-click follow-up</Btn>
                   <Btn outline onClick={()=>setStage(c.id,"Répondu")}>✓ Replied</Btn>
                 </div>
@@ -701,10 +703,9 @@ function App() {
                   {selected.email && (
                     <Btn warning onClick={async()=>{
                       setGenerating(true); setMessage(""); setGmailStatus("");
-                      const msg = await generateMsg(selected, true);
-                      const ok = await createGmailDraft(selected, msg);
-                      setGmailStatus(ok ? "✅ Follow-up draft created in Gmail" : "⚠️ Error");
-                      updateContact(selected.id, { stage:"Relance envoyée", lastContact:todayStr(), followUpDate:addDays(todayStr(),7), messageHistory:[...(selected.messageHistory||[]),{date:todayStr(),type:"followup",preview:msg.slice(0,80)}] });
+                      const result = await createGmailDraft(selected, true);
+                      setGmailStatus(result.ok ? "✅ Follow-up draft created in Gmail" : "⚠️ Error");
+                      updateContact(selected.id, { stage:"Relance envoyée", lastContact:todayStr(), followUpDate:addDays(todayStr(),7), messageHistory:[...(selected.messageHistory||[]),{date:todayStr(),type:"followup",preview:"Follow-up sent"}] });
                       setGenerating(false);
                     }} disabled={generating}>⚡ 1-click follow-up draft</Btn>
                   )}
@@ -718,7 +719,7 @@ function App() {
                   </div>
                   <div style={{ display:"flex", gap:6, flexWrap:"wrap" }}>
                     <Btn outline onClick={()=>navigator.clipboard?.writeText(message)}>↗ Copy</Btn>
-                    {selected.email && <Btn primary onClick={()=>handleSendDraft(selected,message)}>📧 Create Gmail draft</Btn>}
+                    {selected.email && <Btn primary onClick={()=>handleSendDraft(selected,false)}>📧 Create Gmail draft</Btn>}
                     {!selected.email && <span style={{ fontSize:11, color:"#B45309" }}>⚠️ Add email to create draft</span>}
                   </div>
                   {gmailStatus && <div style={{ fontSize:11, marginTop:6, fontWeight:500, color:gmailStatus.startsWith("✅")?"#059669":"#B45309" }}>{gmailStatus}</div>}
