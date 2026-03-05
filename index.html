@@ -117,7 +117,9 @@ const parseApolloCsv = (text) => {
     const industry = get(row, "industry");
     const keywords = get(row, "keywords").slice(0, 60);
     const departments = get(row, "departments", "sub departments");
-    return { name, company, role, email, linkedin, grade, industry, keywords, departments, selected: true, sector: "" };
+    const city = get(row, "city");
+    const subDepartments = get(row, "sub departments", "sub_departments");
+    return { name, company, role, email, linkedin, grade, industry, keywords, departments, city, subDepartments, selected: true, sector: "" };
   }).filter(r => r.name.trim() && r.company);
 };
 
@@ -154,7 +156,7 @@ const generateMsg = async (contact, isFollowUp = false) => {
 // ── Create Gmail draft — Apps Script generates + creates in one call ──
 const createGmailDraft = async (contact, isFollowUp = false) => {
   // Send minimal contact object to avoid URL length issues
-  const slim = { id: contact.id, name: contact.name, company: contact.company, role: contact.role, sector: contact.sector || "", email: contact.email, notes: contact.notes || "" };
+  const slim = { id: contact.id, name: contact.name, company: contact.company, role: contact.role, sector: contact.sector || "", email: contact.email, notes: contact.notes || "", city: contact.city || "", subDepartments: contact.subDepartments || "" };
   const data = await sheetsCall({ action: "createDraft", data: slim, isFollowUp: isFollowUp ? "1" : "0" });
   return { ok: data.ok === true, message: data.message || "" };
 };
@@ -387,7 +389,8 @@ function App() {
       id: String(Date.now()) + String(Math.floor(Math.random()*10000)),
       name: r.name, company: r.company, role: r.role,
       grade: r.grade, school: "", linkedin: r.linkedin, email: r.email,
-      sector: r.sector, stage: "À contacter", notes: "", lastContact: null,
+      sector: r.sector, city: r.city || "", subDepartments: r.subDepartments || "",
+      stage: "À contacter", notes: "", lastContact: null,
       followUpDate: null, source: "apollo", messageHistory: []
     }));
     setContacts(p => [...p, ...newContacts]);
