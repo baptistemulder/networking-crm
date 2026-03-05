@@ -492,8 +492,8 @@ function App() {
             )}
             <Btn outline onClick={() => exportCSV(filtered)}>↓ CSV</Btn>
             <Btn outline onClick={() => { setShowApollo(true); setApolloResults([]); setApolloError(""); setApolloStep("upload"); }}>📥 Import Apollo</Btn>
-            {selected && selected.email && <Btn outline onClick={() => handleSendDraft(selected, true)} disabled={generating}>✉ Follow-up draft</Btn>}
-            {selected && selected.email && <Btn primary onClick={() => handleSendDraft(selected, false)} disabled={generating}>📧 Gmail draft</Btn>}
+            <Btn outline onClick={() => { const c = selected || contacts.find(x => selectedIds.has(x.id) && x.email); if (c) handleSendDraft(c, true); }} disabled={generating || !(selected?.email || contacts.some(x => selectedIds.has(x.id) && x.email))}>✉ Follow-up draft</Btn>
+            <Btn primary onClick={() => { const c = selected || contacts.find(x => selectedIds.has(x.id) && x.email); if (c) handleSendDraft(c, false); }} disabled={generating || !(selected?.email || contacts.some(x => selectedIds.has(x.id) && x.email))}>📧 Gmail draft</Btn>
             <Btn primary onClick={() => setShowAdd(true)}>+ Add</Btn>
           </div>
         </div>
