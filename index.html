@@ -144,7 +144,9 @@ const generateMsg = async (contact, isFollowUp = false) => {
 
 // ── Create Gmail draft — Apps Script generates + creates in one call ──
 const createGmailDraft = async (contact, isFollowUp = false) => {
-  const data = await sheetsCall({ action: "createDraft", data: contact, isFollowUp: isFollowUp ? "1" : "0" });
+  // Send minimal contact object to avoid URL length issues
+  const slim = { id: contact.id, name: contact.name, company: contact.company, role: contact.role, sector: contact.sector || "", email: contact.email, notes: contact.notes || "" };
+  const data = await sheetsCall({ action: "createDraft", data: slim, isFollowUp: isFollowUp ? "1" : "0" });
   return { ok: data.ok === true, message: data.message || "" };
 };
 
@@ -311,12 +313,16 @@ function App() {
 
   const handleSendDraft = async (contact, isFollowUp = false) => {
     if (!contact.email) { setGmailStatus("⚠️ No email — add it first"); return; }
-    setGmailStatus("Creating draft...");
+    setGenerating(true); setMessage(""); setGmailStatus("Generating + creating draft...");
     const result = await createGmailDraft(contact, isFollowUp);
-    setGmailStatus(result.ok ? "✅ Draft created in Gmail" : "⚠️ Gmail error — copy manually");
+    setGenerating(false);
     if (result.ok) {
       setMessage(result.message);
+      setGmailStatus("✅ Draft created in Gmail");
       setStage(contact.id, "Draft créé");
+      updateContact(contact.id, { messageHistory: [...(contact.messageHistory||[]), { date: todayStr(), type: isFollowUp ? "followup" : "initial", preview: result.message.slice(0,80) }] });
+    } else {
+      setGmailStatus("⚠️ Gmail error — check Apps Script logs");
     }
   };
 
@@ -365,18 +371,19 @@ function App() {
     reader.readAsText(file);
   };
 
-  const importApollo = () => {
+  const importApollo = async () => {
     const toImport = apolloResults.filter(r=>r.selected);
     if (!toImport.length) return;
     const newContacts = toImport.map(r => ({
-      id: Date.now()+Math.random(), name: r.name, company: r.company, role: r.role,
+      id: String(Date.now()) + String(Math.floor(Math.random()*10000)),
+      name: r.name, company: r.company, role: r.role,
       grade: r.grade, school: "", linkedin: r.linkedin, email: r.email,
       sector: r.sector, stage: "À contacter", notes: "", lastContact: null,
       followUpDate: null, source: "apollo", messageHistory: []
     }));
     setContacts(p => [...p, ...newContacts]);
-    syncBatch(newContacts);
     setShowApollo(false); setApolloResults([]); setApolloStep("upload");
+    await syncBatch(newContacts);
   };
 
   // ── Calendar — via Apps Script ──
