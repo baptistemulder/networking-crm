@@ -339,8 +339,9 @@ function App() {
     setGenerating(false);
     if (result.ok) {
       setMessage(result.message);
-      setGmailStatus("✅ Draft created in Gmail");
-      setStage(contact.id, "Message envoyé");
+      const newStage = isFollowUp ? "Relance envoyée" : "Message envoyé";
+      setGmailStatus(`✅ Draft created in Gmail → ${newStage}`);
+      setStage(contact.id, newStage);
       updateContact(contact.id, { messageHistory: [...(contact.messageHistory||[]), { date: todayStr(), type: isFollowUp ? "followup" : "initial", preview: result.message.slice(0,80) }] });
     } else {
       setGmailStatus("⚠️ Gmail error — check Apps Script logs");
