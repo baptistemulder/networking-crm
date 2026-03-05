@@ -87,10 +87,21 @@ const parseApolloCsv = (text) => {
     const role = get(row, "title", "job title");
     const seniority = get(row, "seniority").toLowerCase();
     let grade = "Analyst";
-    if (seniority === "partner" || seniority === "c_suite" || role.toLowerCase().includes("managing director") || role.toLowerCase().includes(" md")) grade = "MD";
-    else if (seniority === "director" || role.toLowerCase().includes("director")) grade = "Director";
-    else if (seniority === "vp" || seniority === "vice_president" || role.toLowerCase().includes("vice president") || /\bvp\b/i.test(role)) grade = "VP";
-    else if (seniority === "senior" || seniority === "manager" || role.toLowerCase().includes("associate") || role.toLowerCase().includes("manager")) grade = "Associate";
+    // Priority: use Seniority column from Apollo first, then fallback to role title
+    if (seniority === "partner" || seniority === "c_suite" || seniority === "owner" ||
+        role.toLowerCase().includes("managing director") || role.toLowerCase().includes("managing partner") ||
+        /\bmd\b/i.test(role) || role.toLowerCase().includes("chief ") || role.toLowerCase().includes(" ceo") || role.toLowerCase().includes(" cfo") || role.toLowerCase().includes(" coo")) {
+      grade = "MD";
+    } else if (seniority === "director" || seniority === "head" ||
+        role.toLowerCase().includes("director") || role.toLowerCase().includes("head of") || role.toLowerCase().includes("principal")) {
+      grade = "Director";
+    } else if (seniority === "vp" || seniority === "vice_president" ||
+        role.toLowerCase().includes("vice president") || /\bvp\b/i.test(role)) {
+      grade = "VP";
+    } else if (seniority === "senior" || seniority === "manager" ||
+        role.toLowerCase().includes("associate") || role.toLowerCase().includes("manager") || role.toLowerCase().includes("senior")) {
+      grade = "Associate";
+    }
     const company = get(row, "company name", "organization", "account name");
     const email = get(row, "email", "work email");
     const linkedin = get(row, "person linkedin url", "linkedin url", "linkedin").replace(/https?:\/\//,"");
