@@ -23,14 +23,12 @@
 const { useState, useEffect, useCallback } = React;
 
 const STAGES = ["À contacter", "Draft créé", "Message envoyé", "Relance envoyée", "Répondu", "Call planifié", "Done"];
-const SECTORS = ["Private Debt", "Leveraged Finance", "Infrastructure Debt", "Restructuring", "DCM", "Other"];
+const SECTORS = ["Private Debt", "Leveraged Finance", "M&A Advisory", "Infrastructure Debt", "Infrastructure Equity", "Restructuring", "DCM", "ECM", "Private Equity", "Venture Capital", "Real Assets", "Hedge Fund", "Asset Management", "Corporate Banking", "Risk Advisory", "Audit & Accounting", "Management Consulting", "Tax & Legal", "Fintech", "Insurance", "Other"];
 const GRADES = ["Analyst", "Associate", "VP", "Director", "MD"];
 // Google Sheets Web App URL — remplace après déploiement du Apps Script
 const SHEETS_URL = "https://withered-block-95b0.baptiste-mulderantunes.workers.dev";
 const USE_SHEETS = true;
 
-// CORS-safe call to Apps Script using no-cors iframe trick
-// Apps Script accepts GET requests cross-origin
 const sheetsCall = async (params) => {
   const url = SHEETS_URL + "?" + Object.entries(params).map(([k,v]) => 
     k + "=" + encodeURIComponent(typeof v === "object" ? JSON.stringify(v) : v)
@@ -165,8 +163,7 @@ function App() {
     const load = async () => {
       if (USE_SHEETS) {
         try {
-          const res = await fetch(`${SHEETS_URL}?action=getContacts`);
-          const data = await res.json();
+          const data = await sheetsCall({ action: "getContacts" });
           if (Array.isArray(data) && data.length) {
             setContacts(data);
             setLoaded(true);
@@ -190,7 +187,7 @@ function App() {
   const syncContact = async (contact) => {
     if (!USE_SHEETS) return;
     try {
-await sheetsCall({ action: "upsertContact", data: contact });
+      await sheetsCall({ action: "upsertContact", data: contact });
     } catch(e) { console.warn("Sheets sync failed"); }
   };
 
@@ -198,7 +195,7 @@ await sheetsCall({ action: "upsertContact", data: contact });
   const syncBatch = async (contactsList) => {
     if (!USE_SHEETS) return;
     try {
-await sheetsCall({ action: "upsertBatch", data: contactsList });
+      await sheetsCall({ action: "upsertBatch", data: contactsList });
     } catch(e) { console.warn("Sheets batch sync failed"); }
   };
 
@@ -206,7 +203,7 @@ await sheetsCall({ action: "upsertBatch", data: contactsList });
   const syncDelete = async (id) => {
     if (!USE_SHEETS) return;
     try {
-await sheetsCall({ action: "deleteContact", data: id });
+      await sheetsCall({ action: "deleteContact", data: id });
     } catch(e) { console.warn("Sheets delete sync failed"); }
   };
 
@@ -431,8 +428,6 @@ await sheetsCall({ action: "deleteContact", data: id });
                 {bulkGenerating ? "⏳ Generating..." : `📧 Create ${selectedWithEmail.length} Gmail draft${selectedWithEmail.length>1?"s":""}`}
               </Btn>
             )}
-            {repliesStatus && <span style={{ fontSize:11, color: repliesStatus.startsWith("✅")?"#059669":repliesStatus.startsWith("⚠️")?"#B45309":"#9CA3AF", fontWeight:500 }}>{repliesStatus}</span>}
-            <Btn outline onClick={checkReplies}>📬 Check replies</Btn>
             <Btn outline onClick={() => exportCSV(filtered)}>↓ CSV</Btn>
             <Btn outline onClick={() => { setShowApollo(true); setApolloResults([]); setApolloError(""); setApolloStep("upload"); }}>📥 Import Apollo</Btn>
             <Btn primary onClick={() => setShowAdd(true)}>+ Add</Btn>
@@ -671,9 +666,19 @@ await sheetsCall({ action: "deleteContact", data: id });
               {/* Generate */}
               <div>
                 <Label>Message</Label>
-                <div style={{ display:"flex", gap:8, marginTop:6 }}>
+                <div style={{ display:"flex", gap:8, marginTop:6, flexWrap:"wrap" }}>
                   <Btn primary onClick={()=>handleGenerateDraft(selected,false)} disabled={generating}>{generating?"⏳ Generating...":"✨ Generate email"}</Btn>
-                  <Btn outline onClick={()=>handleGenerateDraft(selected,true)} disabled={generating}>Follow-up</Btn>
+                  <Btn outline onClick={()=>handleGenerateDraft(selected,true)} disabled={generating}>✉ Generate follow-up</Btn>
+                  {selected.email && (
+                    <Btn warning onClick={async()=>{
+                      setGenerating(true); setMessage(""); setGmailStatus("");
+                      const msg = await generateMsg(selected, true);
+                      const ok = await createGmailDraft(selected, msg);
+                      setGmailStatus(ok ? "✅ Follow-up draft created in Gmail" : "⚠️ Error");
+                      updateContact(selected.id, { stage:"Relance envoyée", lastContact:todayStr(), followUpDate:addDays(todayStr(),7), messageHistory:[...(selected.messageHistory||[]),{date:todayStr(),type:"followup",preview:msg.slice(0,80)}] });
+                      setGenerating(false);
+                    }} disabled={generating}>⚡ 1-click follow-up draft</Btn>
+                  )}
                 </div>
               </div>
 
