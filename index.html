@@ -230,7 +230,12 @@ function App() {
   const syncContact = async (contact) => {
     if (!USE_SHEETS) return;
     try {
-      await sheetsPost("upsertContact", contact);
+      const slim = { id: contact.id, name: contact.name, company: contact.company, role: contact.role,
+        grade: contact.grade || "", sector: contact.sector || "", email: contact.email || "",
+        linkedin: contact.linkedin || "", stage: contact.stage || "", lastContact: contact.lastContact || "",
+        followUpDate: contact.followUpDate || "", notes: contact.notes || "", source: contact.source || "",
+        school: contact.school || "", messageHistory: contact.messageHistory || [] };
+      await sheetsCall({ action: "upsertContact", data: slim });
     } catch(e) { console.warn("Sheets sync failed"); }
   };
 
