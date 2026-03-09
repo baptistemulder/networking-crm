@@ -1,489 +1,959 @@
-const SHEET_ID      = "1NtPcOM_nCfl5pFRo2mrN4-bnpJFEdd17M0N4GfjuckM";
-const SHEET_NAME    = "Contacts";
-const ANTHROPIC_KEY = "REMPLACE_PAR_TA_CLE_API"; // sk-ant-...
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Networking CRM — Baptiste Mulder</title>
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAzMiAzMiI+CiAgPHJlY3Qgd2lkdGg9IjMyIiBoZWlnaHQ9IjMyIiByeD0iNiIgZmlsbD0iIzExMTgyNyIvPgogIDxyZWN0IHg9IjUiIHk9IjkiIHdpZHRoPSIyMiIgaGVpZ2h0PSIxNSIgcng9IjIiIGZpbGw9Im5vbmUiIHN0cm9rZT0iI2ZmZiIgc3Ryb2tlLXdpZHRoPSIxLjgiLz4KICA8cG9seWxpbmUgcG9pbnRzPSI1LDkgMTYsMTggMjcsOSIgZmlsbD0ibm9uZSIgc3Ryb2tlPSIjZmZmIiBzdHJva2Utd2lkdGg9IjEuOCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCIvPgo8L3N2Zz4=" />
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: "DM Sans", system-ui, sans-serif; background: #F8FAFC; }
+    select, input, textarea, button { font-family: inherit; }
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: #F1F5F9; }
+    ::-webkit-scrollbar-thumb { background: #CBD5E1; border-radius: 3px; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="text/babel">
+const { useState, useEffect, useCallback } = React;
 
-const COLS = {
-  ID:1, NAME:2, COMPANY:3, ROLE:4, GRADE:5, SECTOR:6,
-  EMAIL:7, LINKEDIN:8, STAGE:9, LAST_CONTACT:10,
-  FOLLOWUP_DATE:11, NOTES:12, SOURCE:13, SCHOOL:14, MESSAGE_HISTORY:15
+const STAGES = ["À contacter", "Message envoyé", "Pas de réponse", "Relance envoyée", "Répondu", "Call planifié", "Done"];
+const SECTORS = ["Private Debt", "Leveraged Finance", "M&A Advisory", "Infrastructure Debt", "Infrastructure Equity", "Restructuring", "DCM", "ECM", "Private Equity", "Venture Capital", "Real Assets", "Hedge Fund", "Asset Management", "Corporate Banking", "Risk Advisory", "Audit & Accounting", "Management Consulting", "Tax & Legal", "Fintech", "Insurance", "Other"];
+const GRADES = ["Analyst", "Associate", "VP", "Director", "MD"];
+// Google Sheets Web App URL — remplace après déploiement du Apps Script
+const SHEETS_URL = "https://withered-block-95b0.baptiste-mulderantunes.workers.dev";
+const USE_SHEETS = true;
+
+const sheetsCall = async (params) => {
+  const url = SHEETS_URL + "?" + Object.entries(params).map(([k,v]) => 
+    k + "=" + encodeURIComponent(typeof v === "object" ? JSON.stringify(v) : v)
+  ).join("&");
+  const res = await fetch(url);
+  return res.json();
 };
 
-const STAGES_SENT = ["Draft créé", "Message envoyé", "Relance envoyée", "Répondu"];
-
-function doGet(e) {
-  var action = e.parameter.action;
-  var data = e.parameter.data ? JSON.parse(decodeURIComponent(e.parameter.data)) : null;
-  if (action === "getContacts")   return jsonResponse(getContacts(), e);
-  if (action === "ping")          return jsonResponse({ ok: true }, e);
-  if (action === "upsertContact") return jsonResponse(upsertContact(data), e);
-  if (action === "deleteContact") return jsonResponse(deleteContact(data), e);
-  if (action === "upsertBatch")   return jsonResponse(upsertBatch(data), e);
-  if (action === "classify")      return jsonResponse(aiClassify(data), e);
-  if (action === "generateMsg") {
-    var isFollowUp = e.parameter.isFollowUp === "1";
-    return jsonResponse(aiGenerateMsg(data, isFollowUp), e);
-  }
-  if (action === "createDraft") {
-    var isFollowUp = e.parameter.isFollowUp === "1";
-    var replyToId = e.parameter.replyToId ? decodeURIComponent(e.parameter.replyToId) : null;
-    var generated = aiGenerateMsg(data, isFollowUp);
-    return jsonResponse(aiCreateDraft(data, generated.message, isFollowUp, replyToId), e);
-  }
-  if (action === "createCalEvent") {
-    return jsonResponse(createCalEventDirect(
-      e.parameter.name, e.parameter.company,
-      e.parameter.email, e.parameter.date,
-      e.parameter.time, e.parameter.platform
-    ), e);
-  }
-  return jsonResponse({ error: "Unknown action: " + action }, e);
-}
-
-function doPost(e) {
-  var body = JSON.parse(e.postData.contents);
-  var action = body.action;
-  var data = body.data;
-  var fakeE = { parameter: {} };
-  if (action === "upsertContact") return jsonResponse(upsertContact(data), fakeE);
-  if (action === "upsertBatch")   return jsonResponse(upsertBatch(data), fakeE);
-  if (action === "deleteContact") return jsonResponse(deleteContact(data), fakeE);
-  return jsonResponse({ error: "Unknown POST action: " + action }, fakeE);
-}
-
-function jsonResponse(data, e) {
-  var cb = e && e.parameter && e.parameter.callback;
-  if (cb) {
-    return ContentService
-      .createTextOutput(cb + "(" + JSON.stringify(data) + ")")
-      .setMimeType(ContentService.MimeType.JAVASCRIPT);
-  }
-  return ContentService
-    .createTextOutput(JSON.stringify(data))
-    .setMimeType(ContentService.MimeType.JSON);
-}
-
-// ── Classification secteurs — liste fine ──
-function aiClassify(contacts) {
-  var list = contacts.map(function(c, i) {
-    return i + ". " + c.name + " | " + c.role + " | " + c.company +
-      " | industry: " + (c.industry||"") + " | dept: " + (c.departments||"") +
-      " | keywords: " + (c.keywords||"").slice(0,100);
-  }).join("\n");
-
-  var prompt = "Classify each person into exactly one sector. Return ONLY a JSON array of strings, same order, no markdown, no explanation.\n\n" +
-    "Use the MOST SPECIFIC matching sector from this list:\n" +
-    "- \"Private Debt\" -> Direct Lending, Private Credit, Credit funds, Unitranche, Mezzanine\n" +
-    "- \"Leveraged Finance\" -> Leveraged loans, high yield bonds, LevFin desks at banks (NOT general M&A advisory)\n" +
-    "- \"M&A Advisory\" -> M&A, corporate finance advisory, deal advisory, transaction services\n" +
-    "- \"Infrastructure Debt\" -> Infrastructure lending, Project Finance, PPP, Transport, Energy debt\n" +
-    "- \"Infrastructure Equity\" -> Infrastructure funds investing equity, greenfield/brownfield equity\n" +
-    "- \"Restructuring\" -> Restructuring, Special Situations, Distressed debt, Turnaround\n" +
-    "- \"DCM\" -> Debt Capital Markets, bond issuance, investment grade bonds, syndicated loans at banks\n" +
-    "- \"Private Equity\" -> Buyout funds, growth equity, PE sponsors\n" +
-    "- \"Venture Capital\" -> VC, early stage, seed, Series A/B\n" +
-    "- \"Real Assets\" -> Real estate debt/equity, timberland, agriculture, commodities\n" +
-    "- \"Hedge Fund\" -> Hedge funds, macro, long/short, quant strategies\n" +
-    "- \"Asset Management\" -> Traditional asset managers, mutual funds, wealth management\n" +
-    "- \"Corporate Banking\" -> Relationship banking, RCF, corporate loans at banks\n" +
-    "- \"Risk Advisory\" -> Credit risk, market risk, regulatory, compliance, Basel\n" +
-    "- \"Audit & Accounting\" -> Audit, accounting, financial reporting, Big 4 audit\n" +
-    "- \"Management Consulting\" -> Strategy consulting, operational consulting, McKinsey/BCG/Bain type\n" +
-    "- \"Tax & Legal\" -> Tax advisory, legal, law firms\n" +
-    "- \"Fintech\" -> Financial technology, payments, lending platforms, crypto\n" +
-    "- \"Insurance\" -> Insurance, reinsurance, actuarial\n" +
-    "- \"ECM\" -> Equity Capital Markets, IPO, equity issuance\n" +
-    "If none match precisely, use 2-3 words max derived from their actual role/industry.\n\n" +
-    "People:\n" + list + "\n\nReturn: [\"sector1\",\"sector2\",...]";
-
-  var result = callAnthropic(prompt, 1500);
-  try { return JSON.parse(result.replace(/```json|```/g, "").trim()); }
-  catch(err) { return contacts.map(function() { return "Other"; }); }
-}
-
-// ── Génération message ──
-function aiGenerateMsg(contact, isFollowUp) {
-  var firstName = contact.name.split(" ")[0];
-  var notesContext = contact.notes ? "Notes: " + contact.notes : "";
-  var prompt;
-
-  if (isFollowUp) {
-    prompt = "Write a very short follow-up email from Baptiste Mulder to " + contact.name +
-      " (" + contact.role + " at " + contact.company + ").\n" +
-      "Baptiste sent a first networking email 7 days ago with no reply.\n" +
-      notesContext + "\n\n" +
-      "Format:\n" +
-      "Subject: Re: Exchange about your experience at " + contact.company + "\n\n" +
-      "Dear " + firstName + ",\n\n" +
-      "I wanted to follow up on my previous email. I would still love to connect briefly if you have 15 minutes.\n\n" +
-      "Best regards,\n" +
-      "Baptiste Mulder\n\n" +
-      "Rules: max 3 lines in body. Polite, not pushy. No new information. English only.";
-  } else {
-    var city = contact.city ? " in " + contact.city : "";
-    var dept = contact.subDepartments ? " in the " + contact.subDepartments + " team" : "";
-    prompt = "You are helping write a short networking email for a coffee chat in finance.\n" +
-      "The goal is a natural, concise email asking for a 10-15 minute call.\n" +
-      "This is NOT a sales email. It must sound like a genuine request from a junior professional.\n\n" +
-      "EMAIL RULES\n" +
-      "- Maximum 5 sentences total\n" +
-      "- Professional but informal tone\n" +
-      "- Avoid overly enthusiastic language\n" +
-      "- Do not use: \'I hope this email finds you well\', \'I came across your profile\', \'I was impressed by your background\', \'I am reaching out to connect\', \'I noticed your impressive career\'\n\n" +
-      "EMAIL STRUCTURE\n" +
-      "Sentence 1: Brief introduction of Baptiste Mulder, Analyst in asset finance advisory in Paris.\n" +
-      "Sentence 2: Mention joining the LBS MFA programme in September 2026.\n" +
-      "Sentence 3: One personalized sentence referencing the recipient\'s role, company, or team. Must sound natural and simple. No compliments. Do not start with \'I noticed\'.\n" +
-      "Examples: \'I saw you are part of the infrastructure team at Macquarie.\' / \'I saw you are working in private credit at Ares in London.\' / \'I saw you are currently an analyst in the M&A team at Lazard.\'\n" +
-      "Sentence 4: Ask for a 10-15 minute call.\n" +
-      "Sentence 5: Polite closing.\n\n" +
-      "RECIPIENT\n" +
-      "Name: " + contact.name + "\n" +
-      "Role: " + contact.role + "\n" +
-      "Company: " + contact.company + "\n" +
-      "Sector: " + (contact.sector||"finance") + "\n" +
-      (contact.subDepartments ? "Team: " + contact.subDepartments + "\n" : "") +
-      (contact.city ? "Location: " + contact.city + "\n" : "") +
-      "\nIMPORTANT: Put a blank line (empty line) between EACH paragraph.\n" +
-      "Write ONLY the email, nothing else, in this exact format:\n\n" +
-      "Subject: Exchange about your experience at " + contact.company + "\n\n" +
-      "Dear " + firstName + ",\n\n" +
-      "[Sentence 1: introduce Baptiste as Analyst in asset finance advisory in Paris]\n\n" +
-      "[Sentence 2: mention joining LBS MFA in September 2026]\n\n" +
-      "[Sentence 3: one sentence — state their role/team/company simply, then add a short genuine reason why their specific experience interests Baptiste. Example: 'I saw you are working in direct lending at Ares in London, and the way credit funds approach complex capital structures is something I am keen to understand better.' Keep it natural, not flattering, not generic.]\n\n" +
-      "[Sentence 4: ask for a 10-15 minute call]\n\n" +
-      "[Sentence 5: polite closing]\n\n" +
-      "Best regards,\n" +
-      "Baptiste Mulder";
-  }
-
-  var text = callAnthropic(prompt, 400);
-  var cleaned = text.split("\n").map(function(l){ return l.replace(/\s+$/, ""); })
-    .join("\n").replace(/\n{3,}/g, "\n\n").replace(/^\n+/, "").replace(/\n+$/, "");
-  return { message: cleaned };
-}
-
-// ── Créer draft Gmail (HTML formaté) ──
-function aiCreateDraft(contact, messageText, isFollowUp, replyToId) {
-  try {
-    // Find Subject: line anywhere in the message
-    var lines = messageText.split("\n");
-    var subjectIdx = -1;
-    for (var i = 0; i < lines.length; i++) {
-      if (lines[i].toLowerCase().indexOf("subject:") === 0) { subjectIdx = i; break; }
-    }
-    var subjectLine, body;
-    if (subjectIdx >= 0) {
-      subjectLine = lines[subjectIdx].replace(/^subject:\s*/i, "").trim().slice(0, 100);
-      body = lines.slice(subjectIdx + 1).join("\n").trim();
-    } else {
-      subjectLine = ("Exchange about your experience at " + contact.company).slice(0, 100);
-      body = messageText.trim();
-    }
-    var htmlBody = body
-      .split("\n\n")
-      .map(function(p) { return "<p style='margin:0 0 12px 0;font-family:Arial,sans-serif;font-size:14px;color:#111;'>" + p.replace(/\n/g, "<br>") + "</p>"; })
-      .join("");
-
-    var draft;
-    if (isFollowUp) {
-      // Find sent thread to this contact and reply to it
-      var threads = GmailApp.search("to:" + contact.email + " in:sent", 0, 5);
-      if (threads.length > 0) {
-        // createDraftReplyAll ensures recipient is included in To:
-        draft = threads[0].createDraftReplyAll(body, { htmlBody: htmlBody });
-      } else {
-        // Fallback: new mail if no sent thread found
-        draft = GmailApp.createDraft(contact.email, subjectLine, body, { htmlBody: htmlBody });
-      }
-    } else {
-      draft = GmailApp.createDraft(contact.email, subjectLine, body, { htmlBody: htmlBody });
-    }
-    var messageId = draft.getMessage().getId();
-    return { ok: true, message: messageText, messageId: messageId };
-  } catch(err) {
-    return { ok: false, error: err.message };
-  }
-}
-
-// ── Créer événement calendrier (sans invitation au contact) ──
-function createCalEventDirect(name, company, email, date, time, platform) {
-  try {
-    var parts = date.split("-");
-    var timeParts = (time || "10:00").split(":");
-    var eventDate = new Date(parseInt(parts[0]), parseInt(parts[1])-1, parseInt(parts[2]), parseInt(timeParts[0]), parseInt(timeParts[1]), 0);
-    var endDate = new Date(eventDate.getTime() + 20 * 60 * 1000);
-    CalendarApp.getDefaultCalendar().createEvent(
-      "Call - " + name + " (" + company + ")",
-      eventDate, endDate,
-      { description: "Networking call, LBS MFA 2026\nPlatform: " + (platform||"") + "\nEmail: " + email }
-    );
-    return { ok: true };
-  } catch(err) {
-    return { ok: false, error: err.message };
-  }
-}
-
-// ── Anthropic API ──
-function callAnthropic(prompt, maxTokens) {
-  var response = UrlFetchApp.fetch("https://api.anthropic.com/v1/messages", {
-    method: "post",
-    headers: {
-      "Content-Type": "application/json",
-      "x-api-key": ANTHROPIC_KEY,
-      "anthropic-version": "2023-06-01"
-    },
-    payload: JSON.stringify({
-      model: "claude-sonnet-4-20250514",
-      max_tokens: maxTokens,
-      messages: [{ role: "user", content: prompt }]
-    })
+const sheetsPost = async (action, data) => {
+  const res = await fetch(SHEETS_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action, data })
   });
-  var data = JSON.parse(response.getContentText());
-  return data.content[0].text;
-}
+  return res.json();
+};
+const STORAGE_KEY = "crm:v3"; // fallback localStorage si Sheets pas configuré
+const FOLLOWUP_DAYS = 7;
 
-// ── CRUD Contacts ──
-function getContacts() {
-  var sheet = getSheet();
-  var data  = sheet.getDataRange().getValues();
-  if (data.length < 2) return [];
-  return data.slice(1).map(rowToContact).filter(function(c){ return c.id; });
-}
+const BAPTISTE_BIO = `Baptiste Mulder, French-Dutch, 24. CFA charterholder (all 3 levels, first attempt). Master in Management IESEG (FT Top 26). Starting LBS MFA September 2026. Experience: BNP Paribas CIB Lisbon (Corporate Coverage EMEA), Analyst at Magellan Asset Finance Paris (vessel financing €90m, infrastructure €40m). Targeting Private Debt / Direct Lending / Leveraged Finance in London.`;
 
-function rowToContact(row) {
-  var parsed = safeParseJson(row[COLS.MESSAGE_HISTORY-1], {});
-  var messageHistory = Array.isArray(parsed) ? parsed : (parsed.history || []);
-  var gmailMessageId = Array.isArray(parsed) ? null : (parsed.gmailMessageId || null);
-  return {
-    id: row[COLS.ID-1], name: row[COLS.NAME-1], company: row[COLS.COMPANY-1],
-    role: row[COLS.ROLE-1], grade: row[COLS.GRADE-1], sector: row[COLS.SECTOR-1],
-    email: row[COLS.EMAIL-1], linkedin: row[COLS.LINKEDIN-1], stage: row[COLS.STAGE-1],
-    lastContact: row[COLS.LAST_CONTACT-1], followUpDate: row[COLS.FOLLOWUP_DATE-1],
-    notes: row[COLS.NOTES-1], source: row[COLS.SOURCE-1], school: row[COLS.SCHOOL-1],
-    messageHistory: messageHistory,
-    gmailMessageId: gmailMessageId,
+const SAMPLE = [
+  { id: 1, name: "Sarah Chen", company: "Arcmont Asset Management", role: "Associate - Direct Lending", grade: "Associate", school: "LBS MFA 2021", linkedin: "linkedin.com/in/sarahchen", email: "s.chen@arcmont.com", sector: "Private Debt", stage: "À contacter", notes: "", lastContact: null, followUpDate: null, source: "manual", messageHistory: [] },
+  { id: 2, name: "James O'Brien", company: "Hayfin Capital", role: "Analyst - Private Credit", grade: "Analyst", school: "LBS MFA 2023", linkedin: "linkedin.com/in/jamesobrien", email: "j.obrien@hayfin.com", sector: "Private Debt", stage: "Message envoyé", notes: "", lastContact: "2026-02-20", followUpDate: "2026-02-27", source: "manual", messageHistory: [] },
+];
+
+const todayStr = () => new Date().toISOString().split("T")[0];
+const addDays = (d, n) => new Date(new Date(d).getTime() + n * 86400000).toISOString().split("T")[0];
+const isPast = (d) => d && new Date(d) <= new Date();
+
+const STAGE_COLOR = {
+  "À contacter": "#94A3B8", "Message envoyé": "#3B82F6", "Pas de réponse": "#F59E0B", "Relance envoyée": "#FB923C", "Répondu": "#10B981", "Call planifié": "#8B5CF6", "Done": "#059669",
+};
+const GRADE_COLOR = { Analyst: "#3B82F6", Associate: "#8B5CF6", VP: "#EC4899", Director: "#F59E0B", MD: "#EF4444" };
+
+const exportCSV = (contacts) => {
+  const h = ["Name","Company","Role","Grade","Sector","Email","LinkedIn","Stage","Last Contact"];
+  const rows = contacts.map(c => [c.name,c.company,c.role,c.grade,c.sector,c.email,c.linkedin,c.stage,c.lastContact||""]);
+  const blob = new Blob([[h,...rows].map(r=>r.join(",")).join("\n")],{type:"text/csv"});
+  const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = "contacts.csv"; a.click();
+};
+
+// ── Parse Apollo CSV ──
+const parseApolloCsv = (text) => {
+  const lines = text.trim().split("\n");
+  if (lines.length < 2) return [];
+  const parseRow = (line) => {
+    const vals = []; let cur = "", inQ = false;
+    for (const ch of line) {
+      if (ch === '"') inQ = !inQ;
+      else if (ch === "," && !inQ) { vals.push(cur.trim()); cur = ""; }
+      else cur += ch;
+    }
+    vals.push(cur.trim());
+    return vals.map(v => v.replace(/^"|"$/g,"").trim());
   };
-}
-
-function contactToRow(c) {
-  var historyData = { history: c.messageHistory || [], gmailMessageId: c.gmailMessageId || null };
-  return [c.id, c.name, c.company, c.role, c.grade, c.sector, c.email, c.linkedin,
-    c.stage, c.lastContact, c.followUpDate, c.notes, c.source, c.school,
-    JSON.stringify(historyData)];
-}
-
-function upsertContact(contact) {
-  var sheet = getSheet();
-  var data  = sheet.getDataRange().getValues();
-  for (var i = 1; i < data.length; i++) {
-    if (String(data[i][COLS.ID-1]) === String(contact.id)) {
-      sheet.getRange(i+1, 1, 1, 15).setValues([contactToRow(contact)]);
-      return { ok: true, action: "updated" };
+  const headers = parseRow(lines[0]).map(h => h.toLowerCase());
+  const get = (row, ...keys) => { for (const k of keys) { const i = headers.indexOf(k); if (i >= 0 && row[i]) return row[i]; } return ""; };
+  return lines.slice(1).map(line => {
+    const row = parseRow(line);
+    const firstName = get(row, "first name");
+    const lastName = get(row, "last name");
+    const name = `${firstName} ${lastName}`.trim();
+    const role = get(row, "title", "job title");
+    const seniority = get(row, "seniority").toLowerCase();
+    let grade = "Analyst";
+    // Priority: use Seniority column from Apollo first, then fallback to role title
+    if (seniority === "partner" || seniority === "c_suite" || seniority === "owner" ||
+        role.toLowerCase().includes("managing director") || role.toLowerCase().includes("managing partner") ||
+        /\bmd\b/i.test(role) || role.toLowerCase().includes("chief ") || role.toLowerCase().includes(" ceo") || role.toLowerCase().includes(" cfo") || role.toLowerCase().includes(" coo")) {
+      grade = "MD";
+    } else if (seniority === "director" || seniority === "head" ||
+        role.toLowerCase().includes("director") || role.toLowerCase().includes("head of") || role.toLowerCase().includes("principal")) {
+      grade = "Director";
+    } else if (seniority === "vp" || seniority === "vice_president" ||
+        role.toLowerCase().includes("vice president") || /\bvp\b/i.test(role)) {
+      grade = "VP";
+    } else if (seniority === "senior" || seniority === "manager" ||
+        role.toLowerCase().includes("associate") || role.toLowerCase().includes("manager") || role.toLowerCase().includes("senior")) {
+      grade = "Associate";
     }
+    const company = get(row, "company name", "organization", "account name");
+    const email = get(row, "email", "work email");
+    const linkedin = get(row, "person linkedin url", "linkedin url", "linkedin").replace(/https?:\/\//,"");
+    const industry = get(row, "industry");
+    const keywords = get(row, "keywords").slice(0, 60);
+    const departments = get(row, "departments", "sub departments");
+    const city = get(row, "city");
+    const subDepartments = get(row, "sub departments", "sub_departments");
+    return { name, company, role, email, linkedin, grade, industry, keywords, departments, city, subDepartments, selected: true, sector: "" };
+  }).filter(r => r.name.trim() && r.company);
+};
+
+// ── AI classify contacts — chunked via Apps Script proxy ──
+const classifyContacts = async (contacts) => {
+  // Strip heavy fields before sending, keep only what's needed for classification
+  const slim = contacts.map(c => ({
+    name: c.name,
+    role: c.role,
+    company: c.company,
+    industry: (c.industry||"").slice(0, 40),
+    departments: (c.departments||"").slice(0, 40),
+    keywords: (c.keywords||"").slice(0, 60),
+  }));
+
+  // Chunk into groups of 10 to avoid URL length limits
+  const CHUNK = 10;
+  const results = [];
+  for (let i = 0; i < slim.length; i += CHUNK) {
+    const chunk = slim.slice(i, i + CHUNK);
+    const data = await sheetsCall({ action: "classify", data: chunk });
+    const sectors = Array.isArray(data) ? data : chunk.map(() => "Other");
+    results.push(...sectors);
   }
-  sheet.appendRow(contactToRow(contact));
-  return { ok: true, action: "inserted" };
-}
+  return results;
+};
 
-function upsertBatch(contacts) {
-  contacts.forEach(upsertContact);
-  return { ok: true, count: contacts.length };
-}
+// ── Generate message — via Apps Script proxy ──
+const generateMsg = async (contact, isFollowUp = false) => {
+  const data = await sheetsCall({ action: "generateMsg", data: contact, isFollowUp: isFollowUp ? "1" : "0" });
+  return data.message || "Error generating message.";
+};
 
-function deleteContact(id) {
-  var sheet = getSheet();
-  var data  = sheet.getDataRange().getValues();
-  for (var i = 1; i < data.length; i++) {
-    if (String(data[i][COLS.ID-1]) === String(id)) {
-      sheet.deleteRow(i+1);
-      return { ok: true };
-    }
-  }
-  return { ok: false, error: "Not found" };
-}
+// ── Create Gmail draft — Apps Script generates + creates in one call ──
+const createGmailDraft = async (contact, isFollowUp = false) => {
+  const slim = { id: contact.id, name: contact.name, company: contact.company, role: contact.role, sector: contact.sector || "", email: contact.email, notes: contact.notes || "", city: contact.city || "", subDepartments: contact.subDepartments || "" };
+  const params = { action: "createDraft", data: slim, isFollowUp: isFollowUp ? "1" : "0" };
+  if (isFollowUp && contact.gmailMessageId) params.replyToId = contact.gmailMessageId;
+  const data = await sheetsCall(params);
+  return { ok: data.ok === true, message: data.message || "", messageId: data.messageId || null };
+};
 
-// ── Détection réponses (trigger 1 min) ──
-function checkReplies() {
-  var sheet = getSheet();
-  var data  = sheet.getDataRange().getValues();
-  if (data.length < 2) return;
-  var updated = 0;
+function App() {
+  const [contacts, setContacts] = useState([]);
+  const [loaded, setLoaded] = useState(false);
+  const [tab, setTab] = useState("contacts");
+  const [selected, setSelected] = useState(null);
+  const [selectedIds, setSelectedIds] = useState(new Set());
+  const [filterSector, setFilterSector] = useState("");
+  const [filterGrade, setFilterGrade] = useState("");
+  const [stageTab, setStageTab] = useState("all");
 
-  for (var i = 1; i < data.length; i++) {
-    var row   = data[i];
-    var stage = row[COLS.STAGE-1];
-    var email = row[COLS.EMAIL-1];
-    if (!STAGES_SENT.includes(stage) || !email) continue;
+  // Add contact
+  const [showAdd, setShowAdd] = useState(false);
+  const [newC, setNewC] = useState({ name:"",company:"",role:"",grade:"Analyst",linkedin:"",email:"",sector:"Private Debt" });
 
-    // Search both sent threads AND incoming messages from contact
-    var sentThreads = GmailApp.search("to:" + email + " in:sent", 0, 5);
-    var inboxThreads = GmailApp.search("from:" + email, 0, 5);
-    var allThreads = sentThreads.concat(inboxThreads);
-    // Deduplicate by thread ID
-    var seenIds = {};
-    var threads = allThreads.filter(function(t) {
-      var id = t.getId();
-      if (seenIds[id]) return false;
-      seenIds[id] = true;
-      return true;
+  // Contact panel
+  const [message, setMessage] = useState("");
+  const [generating, setGenerating] = useState(false);
+  const [gmailStatus, setGmailStatus] = useState("");
+
+  // Bulk draft
+  const [bulkGenerating, setBulkGenerating] = useState(false);
+  const [bulkProgress, setBulkProgress] = useState("");
+
+  // Apollo import
+  const [showApollo, setShowApollo] = useState(false);
+  const [apolloParsing, setApolloParsing] = useState(false);
+  const [apolloResults, setApolloResults] = useState([]);
+  const [apolloError, setApolloError] = useState("");
+  const [apolloStep, setApolloStep] = useState("upload"); // upload | review
+
+  // Calendar
+  const [calShow, setCalShow] = useState(false);
+  const [calContact, setCalContact] = useState(null);
+  const [calDate, setCalDate] = useState("");
+  const [calTime, setCalTime] = useState("10:00");
+  const [calPlatform, setCalPlatform] = useState("Google Meet");
+  const [calStatus, setCalStatus] = useState("");
+  const [repliesStatus, setRepliesStatus] = useState("");
+
+  // ── Load contacts (Sheets or localStorage) ──
+  useEffect(() => {
+    const load = async () => {
+      if (USE_SHEETS) {
+        try {
+          const data = await sheetsCall({ action: "getContacts" });
+          if (Array.isArray(data) && data.length) {
+            setContacts(data);
+            setLoaded(true);
+            return;
+          }
+        } catch(e) { console.warn("Sheets load failed, falling back to localStorage"); }
+      }
+      try { const s = localStorage.getItem(STORAGE_KEY); setContacts(s ? JSON.parse(s) : SAMPLE); }
+      catch { setContacts(SAMPLE); }
+      setLoaded(true);
+    };
+    load();
+  }, []);
+
+  // ── Save to localStorage always (fast local cache) ──
+  useEffect(() => {
+    if (loaded) localStorage.setItem(STORAGE_KEY, JSON.stringify(contacts));
+  }, [contacts, loaded]);
+
+  // ── Sync single contact to Sheets ──
+  const syncContact = async (contact) => {
+    if (!USE_SHEETS) return;
+    try {
+      await sheetsPost("upsertContact", contact);
+    } catch(e) { console.warn("Sheets sync failed"); }
+  };
+
+  // ── Sync batch to Sheets ──
+  const syncBatch = async (contactsList) => {
+    if (!USE_SHEETS) return;
+    try {
+      await sheetsPost("upsertBatch", contactsList);
+    } catch(e) { console.warn("Sheets batch sync failed"); }
+  };
+
+  // ── Sync delete to Sheets ──
+  const syncDelete = async (id) => {
+    if (!USE_SHEETS) return;
+    try {
+      await sheetsPost("deleteContact", id);
+    } catch(e) { console.warn("Sheets delete sync failed"); }
+  };
+
+  // ── Auto-upgrade "Message envoyé" → "Pas de réponse" after 7 days ──
+  useEffect(() => {
+    if (!loaded) return;
+    const today = todayStr();
+    contacts.forEach(c => {
+      if (c.stage === "Message envoyé" && c.followUpDate && c.followUpDate <= today) {
+        updateContact(c.id, { stage: "Pas de réponse" });
+      }
     });
-    if (!threads.length) continue;
+  }, [loaded]);
 
-    var hasReply = false, callConfirmed = false;
-    for (var t = 0; t < threads.length; t++) {
-      var messages = threads[t].getMessages();
-      var allText = "";
-      for (var m = 0; m < messages.length; m++) {
-        var from = messages[m].getFrom().toLowerCase();
-        allText += messages[m].getPlainBody() + "\n";
-        // Check if contact replied (not Baptiste's own messages)
-        if (from.includes(email.toLowerCase().split("@")[0]) || from.includes(email.toLowerCase())) {
-          hasReply = true;
-        }
-      }
-      if (hasReply && baptisteAccepted(allText.toLowerCase())) callConfirmed = true;
-      if (hasReply) break;
-    }
+  // ── Poll Sheets for updates (reply detection by Apps Script) every 60s ──
+  useEffect(() => {
+    if (!USE_SHEETS || !loaded) return;
+    const interval = setInterval(async () => {
+      try {
+        const data = await sheetsCall({ action: "getContacts" });
+        if (!Array.isArray(data)) return;
+        // Only update contacts whose stage has changed (from Apps Script)
+        setContacts(prev => prev.map(local => {
+          const remote = data.find(r => String(r.id) === String(local.id));
+          if (!remote) return local;
+          if (remote.stage !== local.stage) return { ...local, stage: remote.stage, lastContact: remote.lastContact };
+          return local;
+        }));
+      } catch {}
+    }, 60000); // every 60 seconds
+    return () => clearInterval(interval);
+  }, [loaded]);
 
-    if (!hasReply) continue;
-    if (stage === "Répondu" && !callConfirmed) continue;
+  const updateContact = useCallback((id, patch) => {
+    setContacts(p => {
+      const updated = p.map(c => c.id === id ? { ...c, ...patch } : c);
+      const contact = updated.find(c => c.id === id);
+      if (contact) syncContact(contact);
+      return updated;
+    });
+    setSelected(p => p?.id === id ? { ...p, ...patch } : p);
+  }, []);
 
-    var newStage = callConfirmed ? "Call planifié" : "Répondu";
-    if (newStage === stage) continue;
-
-    sheet.getRange(i+1, COLS.STAGE).setValue(newStage);
-    sheet.getRange(i+1, COLS.LAST_CONTACT).setValue(todayStr());
-
-    if (callConfirmed) {
-      createCalendarEventFromThread(row[COLS.NAME-1], row[COLS.COMPANY-1], email, threads[0]);
-    }
-
-    Logger.log(row[COLS.NAME-1] + " -> " + newStage);
-    updated++;
-  }
-  Logger.log("Done. " + updated + " updated.");
-}
-
-function baptisteAccepted(fullText) {
-  var words = ["parfait", "perfect", "sounds good", "works for me", "confirmed",
-    "that works", "see you then", "looking forward", "yes, let's",
-    "convient parfaitement", "je serai disponible"];
-  return words.some(function(w){ return fullText.includes(w); });
-}
-
-function createCalendarEventFromThread(name, company, email, thread) {
-  try {
-    var allText = thread.getMessages().map(function(m){ return m.getPlainBody(); }).join("\n");
-    var eventDate = parseDateFromText(allText) || defaultCallDate();
-    var endDate = new Date(eventDate.getTime() + 20 * 60 * 1000);
-    CalendarApp.getDefaultCalendar().createEvent(
-      "Call - " + name + " (" + company + ")", eventDate, endDate,
-      { description: "Networking call, LBS MFA 2026\nEmail: " + email }
-    );
-  } catch(err) { Logger.log("Calendar failed: " + err); }
-}
-
-// ── Parser de date intelligent ──
-function parseDateFromText(text) {
-  var t = text.toLowerCase();
-
-  // DD/MM/YYYY HH:MM ou HHhMM
-  var m1 = t.match(/(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})[^\d]*(\d{1,2})[:h](\d{0,2})/);
-  if (m1) {
-    var d = new Date(m1[3], m1[2]-1, m1[1], parseInt(m1[4]), parseInt(m1[5]||0), 0);
-    if (!isNaN(d)) { d.setHours(d.getHours() + 1); return d; } // UK→Paris +1h
-  }
-
-  // DD/MM/YYYY sans heure
-  var m2 = t.match(/(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})/);
-  if (m2) {
-    var d2 = new Date(m2[3], m2[2]-1, m2[1], 10, 0, 0);
-    if (!isNaN(d2)) return d2;
-  }
-
-  // "6 march", "15 january", "3 avril" etc.
-  var months = {
-    january:0, february:1, march:2, april:3, may:4, june:5,
-    july:6, august:7, september:8, october:9, november:10, december:11,
-    janvier:0, "février":1, mars:2, avril:3, mai:4, juin:5,
-    juillet:6, "août":7, septembre:8, octobre:9, novembre:10, "décembre":11
+  const deleteContact = (id) => {
+    setContacts(p => p.filter(c => c.id !== id));
+    setSelected(null);
+    setSelectedIds(p => { const n = new Set(p); n.delete(id); return n; });
+    syncDelete(id);
   };
-  var monthNames = Object.keys(months).join("|");
-  var mRe = new RegExp("(\\d{1,2})\\s+(" + monthNames + ")");
-  var mMatch = t.match(mRe);
-  if (mMatch) {
-    var d3 = new Date();
-    d3.setMonth(months[mMatch[2]]);
-    d3.setDate(parseInt(mMatch[1]));
-    // Cherche heure : "7pm", "14h", "14:00", "2 pm"
-    var hMatch = t.match(/(\d{1,2})\s*(?:pm|am)/i) || t.match(/(\d{1,2})[:h](\d{0,2})/);
-    if (hMatch) {
-      var hour = parseInt(hMatch[1]);
-      var min  = parseInt(hMatch[2] || "0") || 0;
-      if (/pm/i.test(t.slice(t.indexOf(hMatch[0]), t.indexOf(hMatch[0])+6)) && hour < 12) hour += 12;
-      d3.setHours(hour + 1, min, 0, 0); // UK→Paris +1h
+
+  const setStage = useCallback((id, stage) => {
+    const patch = { stage, lastContact: todayStr() };
+    if (stage === "Message envoyé" || stage === "Relance envoyée") patch.followUpDate = addDays(todayStr(), FOLLOWUP_DAYS);
+    updateContact(id, patch);
+    if (stage === "Call planifié") {
+      setCalContact(contacts.find(c => c.id === id));
+      setCalShow(true);
+    }
+  }, [contacts, updateContact]);
+
+  const filtered = contacts.filter(c => {
+    if (filterSector && c.sector !== filterSector) return false;
+    if (filterGrade && c.grade !== filterGrade) return false;
+    if (stageTab !== "all" && c.stage !== stageTab) return false;
+    return true;
+  });
+
+  const due = contacts.filter(c => c.stage === "Pas de réponse");
+
+  const toggleSelect = (id) => {
+    setSelectedIds(p => { const n = new Set(p); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  };
+
+  const toggleSelectAll = () => {
+    if (selectedIds.size === filtered.length) setSelectedIds(new Set());
+    else setSelectedIds(new Set(filtered.map(c => c.id)));
+  };
+
+  // ── Single draft ──
+  const handleGenerateDraft = async (contact, isFollowUp = false) => {
+    setGenerating(true); setMessage(""); setGmailStatus("");
+    const msg = await generateMsg(contact, isFollowUp);
+    setMessage(msg);
+    updateContact(contact.id, { messageHistory: [...(contact.messageHistory||[]), { date: todayStr(), type: isFollowUp?"followup":"initial", preview: msg.slice(0,80) }] });
+    setGenerating(false);
+  };
+
+  const handleSendDraft = async (contact, isFollowUp = false) => {
+    if (!contact.email) { setGmailStatus("⚠️ No email — add it first"); return; }
+    setGenerating(true); setMessage(""); setGmailStatus("Generating + creating draft...");
+    const result = await createGmailDraft(contact, isFollowUp);
+    setGenerating(false);
+    if (result.ok) {
+      setMessage(result.message);
+      const newStage = isFollowUp ? "Relance envoyée" : "Message envoyé";
+      setGmailStatus(`✅ Draft created in Gmail → ${newStage}`);
+      const patch = {
+        stage: newStage,
+        lastContact: todayStr(),
+        followUpDate: addDays(todayStr(), FOLLOWUP_DAYS),
+        messageHistory: [...(contact.messageHistory||[]), { date: todayStr(), type: isFollowUp ? "followup" : "initial", preview: result.message.slice(0,80) }]
+      };
+      if (!isFollowUp && result.messageId) patch.gmailMessageId = result.messageId;
+      updateContact(contact.id, patch);
     } else {
-      d3.setHours(10, 0, 0, 0);
+      setGmailStatus("⚠️ Gmail error — check Apps Script logs");
     }
-    return d3;
-  }
+  };
 
-  // Nom de jour + heure optionnelle
-  var days = {lundi:1,mardi:2,mercredi:3,jeudi:4,vendredi:5,monday:1,tuesday:2,wednesday:3,thursday:4,friday:5};
-  for (var day in days) {
-    if (t.includes(day)) {
-      var d4 = new Date();
-      var cur = d4.getDay() || 7;
-      var diff = days[day] - cur;
-      if (diff <= 0) diff += 7;
-      d4.setDate(d4.getDate() + diff);
-      var hMatch2 = t.match(/(\d{1,2})\s*(?:pm|am)/i) || t.match(/(\d{1,2})[:h](\d{0,2})/);
-      if (hMatch2) {
-        var h2 = parseInt(hMatch2[1]);
-        var min2 = parseInt(hMatch2[2] || "0") || 0;
-        if (/pm/i.test(t.slice(t.indexOf(hMatch2[0]), t.indexOf(hMatch2[0])+6)) && h2 < 12) h2 += 12;
-        d4.setHours(h2 + 1, min2, 0, 0); // UK→Paris +1h
-      } else {
-        d4.setHours(10, 0, 0, 0);
-      }
-      return d4;
+  // ── Bulk: generate + send all selected ──
+  const handleBulkDraft = async () => {
+    const targets = filtered.filter(c => selectedIds.has(c.id) && c.email);
+    if (!targets.length) { setBulkProgress("⚠️ No contacts with email selected"); return; }
+    setBulkGenerating(true);
+    let done = 0;
+    for (const contact of targets) {
+      setBulkProgress(`⏳ ${done}/${targets.length} — generating for ${contact.name}...`);
+      const msg = await generateMsg(contact, false);
+      await createGmailDraft(contact, false);
+      updateContact(contact.id, {
+        stage: "Message envoyé",
+        lastContact: todayStr(),
+        followUpDate: addDays(todayStr(), FOLLOWUP_DAYS),
+        messageHistory: [...(contact.messageHistory||[]), { date: todayStr(), type: "initial", preview: msg.slice(0,80) }]
+      });
+      done++;
     }
+    setBulkProgress(`✅ ${done} drafts created in Gmail`);
+    setSelectedIds(new Set());
+    setBulkGenerating(false);
+    setTimeout(() => setBulkProgress(""), 4000);
+  };
+
+  // ── Apollo CSV import ──
+  const handleCSVUpload = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setApolloParsing(true); setApolloResults([]); setApolloError(""); setApolloStep("upload");
+    const reader = new FileReader();
+    reader.onload = async (ev) => {
+      try {
+        const raw = parseApolloCsv(ev.target.result);
+        if (!raw.length) { setApolloError("No contacts found in CSV."); setApolloParsing(false); return; }
+        // AI classify sectors
+        const sectors = await classifyContacts(raw);
+        const withSectors = raw.map((c, i) => ({ ...c, sector: sectors[i] || "Other" }));
+        setApolloResults(withSectors);
+        setApolloStep("review");
+      } catch(err) { setApolloError("Parse error: " + err.message); }
+      setApolloParsing(false);
+    };
+    reader.readAsText(file);
+  };
+
+  const importApollo = async () => {
+    const toImport = apolloResults.filter(r=>r.selected);
+    if (!toImport.length) return;
+    const newContacts = toImport.map(r => ({
+      id: String(Date.now()) + String(Math.floor(Math.random()*10000)),
+      name: r.name, company: r.company, role: r.role,
+      grade: r.grade, school: "", linkedin: r.linkedin, email: r.email,
+      sector: r.sector, city: r.city || "", subDepartments: r.subDepartments || "",
+      stage: "À contacter", notes: "", lastContact: null,
+      followUpDate: null, source: "apollo", messageHistory: []
+    }));
+    setContacts(p => [...p, ...newContacts]);
+    setShowApollo(false); setApolloResults([]); setApolloStep("upload");
+    await syncBatch(newContacts);
+  };
+
+  // ── Calendar — via Apps Script ──
+  const createCalEvent = async () => {
+    if (!calDate || !calContact) return;
+    setCalStatus("Creating...");
+    try {
+      const data = await sheetsCall({ action: "createCalEvent", name: calContact.name, company: calContact.company, email: calContact.email, date: calDate, time: calTime, platform: calPlatform });
+      setCalStatus(data.ok ? "✅ Event created" : "⚠️ Error");
+    } catch(e) { setCalStatus("⚠️ Error"); }
+  };
+
+
+  // ── Check Gmail replies ──
+  // This triggers a message in the Claude chat — Claude has direct Gmail MCP access
+  const checkReplies = () => {
+    const sentContacts = contacts.filter(c =>
+      ["Message envoyé", "Relance envoyée"].includes(c.stage) && c.email
+    );
+    if (!sentContacts.length) { setRepliesStatus("No contacts to check."); return; }
+
+    const list = sentContacts.map(c => `${c.name} | ${c.email} | ${c.company}`).join("\n");
+    const msg = `CHECK_REPLIES:\n${list}`;
+
+    // Copy to clipboard and show instruction
+    navigator.clipboard?.writeText(msg).then(() => {
+      setRepliesStatus("📋 Copied — paste in Claude chat to scan Gmail");
+    }).catch(() => {
+      setRepliesStatus("📋 Copy the text below and paste in chat");
+    });
+  };
+
+  // ── Apply reply updates from Claude scan ──
+  const applyReplyUpdate = (email, newStage) => {
+    const contact = contacts.find(c => c.email === email);
+    if (!contact) return;
+    updateContact(contact.id, { stage: newStage, lastContact: todayStr() });
+    if (newStage === "Call planifié") {
+      setCalContact(contact);
+      setCalShow(true);
+    }
+  };
+
+  // Expose applyReplyUpdate globally so Claude can call it from chat
+  if (typeof window !== "undefined") {
+    window.crmUpdateReply = applyReplyUpdate;
+    window.crmContacts = contacts;
   }
 
-  return null;
+  // ── Add contact ──
+  const addContact = () => {
+    if (!newC.name || !newC.company) return;
+    const c = { ...newC, id: Date.now(), lastContact: null, followUpDate: null, source: "manual", messageHistory: [], school: "", notes: "" };
+    setContacts(p => [...p, c]);
+    setNewC({ name:"",company:"",role:"",grade:"Analyst",linkedin:"",email:"",sector:"Private Debt" });
+    setShowAdd(false);
+    setSelected(c);
+  };
+
+  if (!loaded) return <div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",fontSize:13,color:"#9CA3AF"}}>Loading...</div>;
+
+  const selectedContacts = filtered.filter(c => selectedIds.has(c.id));
+  const selectedWithEmail = selectedContacts.filter(c => c.email);
+
+  return (
+    <div style={{ fontFamily: "'DM Sans', system-ui, sans-serif", background: "#F8FAFC", minHeight: "100vh", color: "#111" }}>
+
+      {/* HEADER */}
+      <div style={{ background: "#fff", borderBottom: "1px solid #E5E7EB", padding: "0 24px", position: "sticky", top: 0, zIndex: 40 }}>
+        <div style={{ maxWidth: 1200, margin: "0 auto", display: "flex", alignItems: "center", justifyContent: "space-between", height: 54 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            <span style={{ fontSize: 15, fontWeight: 700 }}>Networking CRM</span>
+            <span style={{ fontSize: 11, color: "#9CA3AF" }}>Baptiste Mulder · LBS MFA 2026</span>
+            <span style={{ fontSize: 10, padding: "2px 7px", borderRadius: 4, background: USE_SHEETS ? "#D1FAE5" : "#FEF3C7", color: USE_SHEETS ? "#065F46" : "#92400E", fontWeight: 600 }}>{USE_SHEETS ? "● Sheets sync ON" : "● Local only"}</span>
+          </div>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            {bulkProgress && <span style={{ fontSize: 11, color: bulkProgress.startsWith("✅")?"#059669":bulkProgress.startsWith("⚠️")?"#B45309":"#6B7280", fontWeight: 500 }}>{bulkProgress}</span>}
+            {due.length > 0 && <button onClick={() => setTab("followups")} style={{ fontSize: 11, fontWeight: 600, color: "#B45309", background: "#FEF3C7", border: "1px solid #FDE68A", padding: "4px 10px", borderRadius: 6, cursor: "pointer" }}>🔔 {due.length} follow-up{due.length>1?"s":""} due</button>}
+            <Btn outline onClick={() => exportCSV(filtered)}>↓ CSV</Btn>
+            <Btn outline onClick={() => { setShowApollo(true); setApolloResults([]); setApolloError(""); setApolloStep("upload"); }}>📥 Import Apollo</Btn>
+            {selectedIds.size > 1 ? (
+              <Btn warning onClick={handleBulkDraft} disabled={bulkGenerating || selectedWithEmail.length === 0}>
+                {bulkGenerating ? "⏳ Generating..." : `📧 ${selectedWithEmail.length} Gmail drafts`}
+              </Btn>
+            ) : (
+              <>
+                <Btn outline onClick={() => { const c = selected || contacts.find(x => selectedIds.has(x.id) && x.email); if (c) handleSendDraft(c, true); }} disabled={generating || !(selected?.email || contacts.some(x => selectedIds.has(x.id) && x.email))}>✉ Follow-up draft</Btn>
+                <Btn primary onClick={() => { const c = selected || contacts.find(x => selectedIds.has(x.id) && x.email); if (c) handleSendDraft(c, false); }} disabled={generating || !(selected?.email || contacts.some(x => selectedIds.has(x.id) && x.email))}>📧 Gmail draft</Btn>
+              </>
+            )}
+            <Btn primary onClick={() => setShowAdd(true)}>+ Add</Btn>
+          </div>
+        </div>
+        {/* TABS */}
+        <div style={{ maxWidth: 1200, margin: "0 auto", display: "flex" }}>
+          {[
+            { id:"contacts", label:`Contacts (${contacts.length})` },
+            { id:"pipeline", label:"Pipeline" },
+            { id:"followups", label:`Follow-ups${due.length>0?` · ${due.length}`:""}` },
+            { id:"analytics", label:"Analytics" },
+          ].map(t => (
+            <button key={t.id} onClick={() => setTab(t.id)} style={{ padding:"10px 16px", fontSize:13, fontWeight:tab===t.id?600:400, color:tab===t.id?"#111":"#6B7280", background:"none", border:"none", borderBottom:tab===t.id?"2px solid #111":"2px solid transparent", cursor:"pointer" }}>
+              {t.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* FILTERS */}
+      <div style={{ background:"#fff", borderBottom:"1px solid #E5E7EB", padding:"8px 24px" }}>
+        <div style={{ maxWidth:1200, margin:"0 auto", display:"flex", gap:8, alignItems:"center" }}>
+          <Sel value={filterSector} onChange={e=>setFilterSector(e.target.value)} options={["", ...Array.from(new Set(contacts.map(c=>c.sector).filter(Boolean))).sort()]} placeholder="All sectors" />
+          <Sel value={filterGrade} onChange={e=>setFilterGrade(e.target.value)} options={["", ...GRADES]} placeholder="All grades" />
+          {(filterSector||filterGrade) && <button onClick={()=>{setFilterSector("");setFilterGrade("");}} style={{fontSize:11,color:"#9CA3AF",background:"none",border:"none",cursor:"pointer"}}>× Clear</button>}
+          <span style={{ marginLeft:"auto", fontSize:11, color:"#9CA3AF" }}>{filtered.length} contacts{selectedIds.size>0?` · ${selectedIds.size} selected`:""}</span>
+        </div>
+      </div>
+
+      <div style={{ maxWidth:1200, margin:"0 auto", padding:"20px 24px" }}>
+
+        {/* CONTACTS */}
+        {tab === "contacts" && (
+          <div>
+            {/* Stage sub-tabs */}
+            <div style={{ display:"flex", gap:0, marginBottom:16, background:"#fff", borderRadius:10, border:"1px solid #E5E7EB", overflow:"hidden" }}>
+              {[["all", "All", contacts.length], ...STAGES.map(s => [s, s, contacts.filter(c=>c.stage===s).length])].map(([key, label, count]) => (
+                <button key={key} onClick={()=>setStageTab(key)} style={{ flex:1, padding:"10px 8px", fontSize:11, fontWeight:stageTab===key?700:400, color:stageTab===key?(key==="all"?"#111":STAGE_COLOR[key]||"#111"):"#6B7280", background:stageTab===key?(key==="all"?"#F8FAFC":`${STAGE_COLOR[key]}10`):"#fff", border:"none", borderBottom:stageTab===key?`2px solid ${key==="all"?"#111":STAGE_COLOR[key]||"#111"}`:"2px solid transparent", cursor:"pointer", whiteSpace:"nowrap" }}>
+                  {label} <span style={{ fontSize:10, opacity:0.7 }}>({count})</span>
+                </button>
+              ))}
+            </div>
+            {/* Table */}
+            <div style={{ background:"#fff", borderRadius:10, border:"1px solid #E5E7EB", overflow:"hidden" }}>
+              <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13 }}>
+                <thead>
+                  <tr style={{ borderBottom:"1px solid #E5E7EB", background:"#F9FAFB" }}>
+                    <th style={{ padding:"9px 14px", width:36 }}>
+                      <input type="checkbox" checked={selectedIds.size===filtered.length&&filtered.length>0} onChange={toggleSelectAll} style={{ cursor:"pointer" }} />
+                    </th>
+                    {["Name","Company","Role","Grade","Sector","Stage","Follow-up",""].map(h=>(
+                      <th key={h} style={{ padding:"9px 14px", textAlign:"left", fontSize:10, fontWeight:600, color:"#6B7280", textTransform:"uppercase", letterSpacing:"0.4px" }}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {filtered.map((c,i) => (
+                    <tr key={c.id} onClick={()=>{setSelected(c);setMessage("");setGmailStatus("");}} style={{ borderBottom:"1px solid #F3F4F6", background: selectedIds.has(c.id)?"#EFF6FF": i%2===0?"#fff":"#FAFAFA", cursor:"pointer" }}>
+                      <td style={{ padding:"10px 14px" }} onClick={e=>e.stopPropagation()}>
+                        <input type="checkbox" checked={selectedIds.has(c.id)} onChange={()=>toggleSelect(c.id)} style={{ cursor:"pointer" }} />
+                      </td>
+                      <td style={{ padding:"10px 14px", fontWeight:600 }}>{c.name}</td>
+                      <td style={{ padding:"10px 14px", color:"#374151", maxWidth:140, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{c.company}</td>
+                      <td style={{ padding:"10px 14px", color:"#6B7280", maxWidth:140, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{c.role}</td>
+                      <td style={{ padding:"10px 14px" }}>
+                        <span style={{ fontSize:11, fontWeight:600, color:GRADE_COLOR[c.grade]||"#6B7280", background:`${GRADE_COLOR[c.grade]||"#6B7280"}15`, padding:"2px 7px", borderRadius:4 }}>{c.grade}</span>
+                      </td>
+                      <td style={{ padding:"10px 14px", fontSize:11, color:"#6B7280" }}>{c.sector}</td>
+                      <td style={{ padding:"10px 14px" }}>
+                        <span style={{ fontSize:11, fontWeight:600, color:STAGE_COLOR[c.stage]||"#6B7280", background:`${STAGE_COLOR[c.stage]||"#6B7280"}18`, padding:"3px 8px", borderRadius:20 }}>{c.stage}</span>
+                      </td>
+                      <td style={{ padding:"10px 14px", fontSize:11, color:isPast(c.followUpDate)?"#B45309":"#9CA3AF" }}>
+                        {c.followUpDate?(isPast(c.followUpDate)?`🔔 ${c.followUpDate}`:c.followUpDate):"—"}
+                      </td>
+                      <td style={{ padding:"10px 14px", textAlign:"right" }}>
+                        <button onClick={(e)=>{e.stopPropagation();deleteContact(c.id);}} style={{ fontSize:14, color:"#D1D5DB", background:"none", border:"none", cursor:"pointer", lineHeight:1, padding:"2px 4px" }} title="Delete" onMouseEnter={e=>e.currentTarget.style.color="#EF4444"} onMouseLeave={e=>e.currentTarget.style.color="#D1D5DB"}>✕</button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {/* PIPELINE */}
+        {tab === "pipeline" && (
+          <div>
+            <div style={{ display:"grid", gridTemplateColumns:"repeat(6,1fr)", gap:10, marginBottom:14 }}>
+              {STAGES.map(s => (
+                <div key={s} style={{ background:"#fff", borderRadius:8, padding:"12px", textAlign:"center", border:"1px solid #E5E7EB" }}>
+                  <div style={{ fontSize:10, fontWeight:600, color:"#9CA3AF", textTransform:"uppercase", marginBottom:4 }}>{s}</div>
+                  <div style={{ fontSize:22, fontWeight:700, color:STAGE_COLOR[s] }}>{contacts.filter(c=>c.stage===s).length}</div>
+                </div>
+              ))}
+            </div>
+            <div style={{ display:"grid", gridTemplateColumns:"repeat(6,1fr)", gap:10 }}>
+              {STAGES.map(s => (
+                <div key={s} style={{ background:"#fff", borderRadius:10, padding:10, border:"1px solid #E5E7EB", minHeight:160 }}>
+                  <div style={{ fontSize:10, fontWeight:700, color:"#9CA3AF", textTransform:"uppercase", letterSpacing:"0.5px", marginBottom:8 }}>{s}</div>
+                  {filtered.filter(c=>c.stage===s).map(c => (
+                    <div key={c.id} onClick={()=>{setSelected(c);setMessage("");setGmailStatus("");}} style={{ background:"#F9FAFB", borderRadius:6, padding:"8px 10px", marginBottom:6, cursor:"pointer", border:"1px solid #E5E7EB" }}
+                      onMouseEnter={e=>e.currentTarget.style.borderColor="#2563EB"}
+                      onMouseLeave={e=>e.currentTarget.style.borderColor="#E5E7EB"}>
+                      <div style={{ fontSize:11, fontWeight:600, marginBottom:2 }}>{c.name}</div>
+                      <div style={{ fontSize:10, color:"#6B7280" }}>{c.company}</div>
+                      {isPast(c.followUpDate) && <div style={{ fontSize:9, color:"#B45309", marginTop:3 }}>🔔 Follow-up due</div>}
+                    </div>
+                  ))}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* FOLLOW-UPS */}
+        {tab === "followups" && (
+          <div>
+            {due.length === 0 ? (
+              <div style={{ background:"#fff", borderRadius:10, border:"1px solid #E5E7EB", padding:48, textAlign:"center" }}>
+                <div style={{ fontSize:28, marginBottom:8 }}>🎉</div>
+                <div style={{ fontWeight:600, color:"#6B7280" }}>No follow-ups pending</div>
+              </div>
+            ) : (
+              <>
+                <div style={{ fontSize:12, color:"#6B7280", marginBottom:12, fontWeight:500 }}>{due.length} contact{due.length>1?"s":""} without reply after 7 days</div>
+                <div style={{ background:"#fff", borderRadius:10, border:"1px solid #E5E7EB", overflow:"hidden" }}>
+                  <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13 }}>
+                    <thead>
+                      <tr style={{ borderBottom:"1px solid #E5E7EB", background:"#F9FAFB" }}>
+                        {["Name","Company","Role","Sector","Sent",""].map(h=>(
+                          <th key={h} style={{ padding:"9px 14px", textAlign:"left", fontSize:10, fontWeight:600, color:"#6B7280", textTransform:"uppercase", letterSpacing:"0.4px" }}>{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {due.map((c,i) => (
+                        <tr key={c.id} onClick={()=>{setSelected(c);setMessage("");setGmailStatus("");}} style={{ borderBottom:"1px solid #F3F4F6", background:i%2===0?"#fff":"#FAFAFA", cursor:"pointer" }}>
+                          <td style={{ padding:"10px 14px", fontWeight:600 }}>{c.name}</td>
+                          <td style={{ padding:"10px 14px", color:"#374151" }}>{c.company}</td>
+                          <td style={{ padding:"10px 14px", color:"#6B7280", maxWidth:140, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{c.role}</td>
+                          <td style={{ padding:"10px 14px", fontSize:11, color:"#6B7280" }}>{c.sector}</td>
+                          <td style={{ padding:"10px 14px", fontSize:11, color:"#9CA3AF" }}>{c.lastContact||"—"}</td>
+                          <td style={{ padding:"10px 14px", textAlign:"right" }}>
+                            <div style={{ display:"flex", gap:6, justifyContent:"flex-end" }}>
+                              <Btn warning onClick={async(e)=>{
+                                e.stopPropagation();
+                                if (c.email) { await createGmailDraft(c, true); updateContact(c.id,{stage:"Relance envoyée",lastContact:todayStr(),followUpDate:addDays(todayStr(),7)}); }
+                              }}>⚡ Follow-up draft</Btn>
+                              <Btn outline onClick={(e)=>{e.stopPropagation();updateContact(c.id,{stage:"Répondu",lastContact:todayStr()});}}>✓ Replied</Btn>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </>
+            )}
+          </div>
+        )}
+
+        {/* ANALYTICS */}
+        {tab === "analytics" && (
+          <div style={{ display:"flex", flexDirection:"column", gap:16 }}>
+            <div style={{ display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:12 }}>
+              {[
+                { label:"Total", value:contacts.length, color:"#2563EB" },
+                { label:"Replied", value:contacts.filter(c=>["Répondu","Call planifié","Done"].includes(c.stage)).length, color:"#10B981" },
+                { label:"Calls booked", value:contacts.filter(c=>["Call planifié","Done"].includes(c.stage)).length, color:"#8B5CF6" },
+                { label:"Reply rate", value:()=>{const s=contacts.filter(c=>c.stage!=="À contacter").length;return s?Math.round(contacts.filter(c=>["Répondu","Call planifié","Done"].includes(c.stage)).length/s*100)+"%":"—"}, color:"#F59E0B" },
+              ].map(m => (
+                <div key={m.label} style={{ background:"#fff", borderRadius:10, border:"1px solid #E5E7EB", padding:"18px 20px" }}>
+                  <div style={{ fontSize:10, fontWeight:600, color:"#9CA3AF", textTransform:"uppercase", letterSpacing:"0.5px", marginBottom:6 }}>{m.label}</div>
+                  <div style={{ fontSize:28, fontWeight:700, color:m.color }}>{typeof m.value==="function"?m.value():m.value}</div>
+                </div>
+              ))}
+            </div>
+            <div style={{ background:"#fff", borderRadius:10, border:"1px solid #E5E7EB", overflow:"hidden" }}>
+              <div style={{ padding:"12px 18px", borderBottom:"1px solid #E5E7EB", fontSize:13, fontWeight:600 }}>By sector</div>
+              <table style={{ width:"100%", borderCollapse:"collapse", fontSize:13 }}>
+                <thead><tr style={{ background:"#F9FAFB" }}>
+                  {["Sector","Total","Replied","Rate",""].map(h=><th key={h} style={{ padding:"8px 16px", textAlign:"left", fontSize:10, fontWeight:600, color:"#9CA3AF", textTransform:"uppercase" }}>{h}</th>)}
+                </tr></thead>
+                <tbody>
+                  {SECTORS.map(s => {
+                    const total = contacts.filter(c=>c.sector===s).length;
+                    if (!total) return null;
+                    const replied = contacts.filter(c=>c.sector===s&&["Répondu","Call planifié","Done"].includes(c.stage)).length;
+                    const rate = Math.round(replied/total*100);
+                    return (
+                      <tr key={s} style={{ borderTop:"1px solid #F3F4F6" }}>
+                        <td style={{ padding:"10px 16px", fontWeight:600 }}>{s}</td>
+                        <td style={{ padding:"10px 16px", color:"#374151" }}>{total}</td>
+                        <td style={{ padding:"10px 16px", color:"#10B981", fontWeight:600 }}>{replied}</td>
+                        <td style={{ padding:"10px 16px", color:"#F59E0B", fontWeight:600 }}>{rate}%</td>
+                        <td style={{ padding:"10px 16px", width:120 }}>
+                          <div style={{ background:"#F3F4F6", borderRadius:4, height:5 }}>
+                            <div style={{ width:`${rate}%`, height:"100%", background:"#2563EB", borderRadius:4 }} />
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* ── CONTACT PANEL ── */}
+      {selected && (
+        <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.25)", zIndex:50, display:"flex", justifyContent:"flex-end" }} onClick={()=>setSelected(null)}>
+          <div style={{ background:"#fff", width:"100%", maxWidth:460, height:"100%", overflowY:"auto", borderLeft:"1px solid #E5E7EB", boxShadow:"-4px 0 24px rgba(0,0,0,0.08)" }} onClick={e=>e.stopPropagation()}>
+
+            <div style={{ padding:"18px 20px 14px", borderBottom:"1px solid #E5E7EB", position:"sticky", top:0, background:"#fff", zIndex:10 }}>
+              <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start" }}>
+                <div>
+                  <div style={{ fontSize:16, fontWeight:700 }}>{selected.name}</div>
+                  <div style={{ fontSize:12, color:"#6B7280", marginTop:1 }}>{selected.role}</div>
+                  <div style={{ fontSize:13, fontWeight:600, color:"#2563EB", marginTop:2 }}>{selected.company}</div>
+                  <div style={{ display:"flex", gap:6, marginTop:8, flexWrap:"wrap" }}>
+                    {selected.linkedin && <a href={`https://${selected.linkedin}`} target="_blank" rel="noreferrer" style={{ fontSize:11, color:"#2563EB", background:"#EFF6FF", padding:"3px 9px", borderRadius:5, textDecoration:"none" }}>LinkedIn →</a>}
+                    {selected.email && <span style={{ fontSize:11, color:"#6B7280", background:"#F3F4F6", padding:"3px 9px", borderRadius:5 }}>{selected.email}</span>}
+                  </div>
+                </div>
+                <div style={{ display:"flex", gap:6, alignItems:"center" }}>
+
+                  <button onClick={()=>setSelected(null)} style={{ fontSize:18, color:"#9CA3AF", background:"none", border:"none", cursor:"pointer" }}>×</button>
+                </div>
+              </div>
+            </div>
+
+            <div style={{ padding:20, display:"flex", flexDirection:"column", gap:16 }}>
+
+              {/* Stage */}
+              <div>
+                <Label>Stage</Label>
+                <div style={{ display:"flex", flexWrap:"wrap", gap:5, marginTop:6 }}>
+                  {STAGES.map(s => (
+                    <button key={s} onClick={()=>setStage(selected.id,s)} style={{ fontSize:11, padding:"4px 10px", borderRadius:20, border:`1.5px solid ${selected.stage===s?STAGE_COLOR[s]:"#E5E7EB"}`, background:selected.stage===s?`${STAGE_COLOR[s]}15`:"#fff", color:selected.stage===s?STAGE_COLOR[s]:"#6B7280", cursor:"pointer", fontWeight:selected.stage===s?600:400 }}>
+                      {s}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Email if missing */}
+              {!selected.email && (
+                <div>
+                  <Label>Work email</Label>
+                  <input type="email" placeholder="firstname@company.com" onChange={e=>updateContact(selected.id,{email:e.target.value})} style={inp} />
+                </div>
+              )}
+
+              {/* Notes & Call Log */}
+              <div>
+                <Label>Notes</Label>
+                <textarea value={selected.notes||""} onChange={e=>updateContact(selected.id,{notes:e.target.value})} placeholder="Context, common connections..." style={{ ...inp, height:60, resize:"none" }} />
+              </div>
+
+
+              {/* Status */}
+              {gmailStatus && <div style={{ fontSize:11, fontWeight:500, padding:"8px 10px", borderRadius:6, background:gmailStatus.startsWith("✅")?"#D1FAE5":"#FEF3C7", color:gmailStatus.startsWith("✅")?"#065F46":"#B45309" }}>{gmailStatus}</div>}
+              {!selected.email && <div style={{ fontSize:11, color:"#B45309" }}>⚠️ Add email to enable draft creation</div>}
+
+              {message && (
+                <div>
+                  <Label>Preview</Label>
+                  <div style={{ background:"#F9FAFB", borderRadius:8, padding:12, fontSize:12, color:"#374151", lineHeight:1.7, whiteSpace:"pre-wrap", maxHeight:220, overflowY:"auto", border:"1px solid #E5E7EB", marginTop:6 }}>
+                    {message}
+                  </div>
+                  <div style={{ marginTop:6 }}>
+                    <Btn outline onClick={()=>navigator.clipboard?.writeText(message)}>↗ Copy</Btn>
+                  </div>
+                </div>
+              )}
+
+              {/* History */}
+              {(selected.messageHistory||[]).length > 0 && (
+                <div>
+                  <Label>History</Label>
+                  {selected.messageHistory.map((m,i) => (
+                    <div key={i} style={{ background:"#F9FAFB", borderRadius:6, padding:"7px 10px", marginTop:5, fontSize:11, border:"1px solid #E5E7EB" }}>
+                      <div style={{ display:"flex", justifyContent:"space-between", marginBottom:2 }}>
+                        <span style={{ fontWeight:600, color:"#9CA3AF", textTransform:"uppercase", fontSize:9 }}>{m.type}</span>
+                        <span style={{ color:"#9CA3AF" }}>{m.date}</span>
+                      </div>
+                      <div style={{ color:"#6B7280" }}>{m.preview}...</div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── APOLLO IMPORT MODAL ── */}
+      {showApollo && (
+        <Overlay onClose={()=>{setShowApollo(false);setApolloResults([]);setApolloStep("upload");}} title="📥 Import Apollo CSV">
+          <div style={{ display:"flex", flexDirection:"column", gap:12 }}>
+            {apolloStep === "upload" && (
+              <>
+                <div style={{ fontSize:12, color:"#6B7280" }}>
+                  Sur Apollo → sélectionne tes contacts → <b>Export</b> → <b>Export to CSV</b> → importe ici.<br/>
+                  Le secteur et le grade sont classifiés automatiquement par IA.
+                </div>
+                <label style={{ display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", gap:8, border:"2px dashed #E5E7EB", borderRadius:8, padding:"28px 16px", cursor:"pointer", background:"#F9FAFB" }}
+                  onMouseEnter={e=>e.currentTarget.style.borderColor="#2563EB"}
+                  onMouseLeave={e=>e.currentTarget.style.borderColor="#E5E7EB"}>
+                  <span style={{ fontSize:28 }}>📄</span>
+                  <span style={{ fontSize:13, fontWeight:600, color:"#374151" }}>Choisir le fichier CSV</span>
+                  <span style={{ fontSize:11, color:"#9CA3AF" }}>Format Apollo export standard</span>
+                  <input type="file" accept=".csv" onChange={handleCSVUpload} style={{ display:"none" }} />
+                </label>
+                {apolloParsing && (
+                  <div style={{ fontSize:12, color:"#6B7280", textAlign:"center", padding:"8px 0" }}>
+                    ⏳ Parsing CSV + classifying sectors with AI...
+                  </div>
+                )}
+                {apolloError && <div style={{ fontSize:12, color:"#B45309", background:"#FEF3C7", padding:"8px 10px", borderRadius:6 }}>{apolloError}</div>}
+              </>
+            )}
+
+            {apolloStep === "review" && apolloResults.length > 0 && (
+              <>
+                <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+                  <span style={{ fontSize:12, fontWeight:600 }}>{apolloResults.length} contacts trouvés · {apolloResults.filter(r=>r.selected).length} sélectionnés</span>
+                  <div style={{ display:"flex", gap:8 }}>
+                    <button onClick={()=>setApolloResults(p=>p.map(r=>({...r,selected:true})))} style={{ fontSize:11, color:"#2563EB", background:"none", border:"none", cursor:"pointer" }}>Tout</button>
+                    <button onClick={()=>setApolloResults(p=>p.map(r=>({...r,selected:false})))} style={{ fontSize:11, color:"#9CA3AF", background:"none", border:"none", cursor:"pointer" }}>Aucun</button>
+                  </div>
+                </div>
+                <div style={{ maxHeight:300, overflowY:"auto", display:"flex", flexDirection:"column", gap:4 }}>
+                  {apolloResults.map((r,i) => (
+                    <div key={i} onClick={()=>setApolloResults(p=>p.map((x,j)=>j===i?{...x,selected:!x.selected}:x))} style={{ display:"flex", alignItems:"center", gap:10, padding:"8px 11px", background:r.selected?"#EFF6FF":"#F9FAFB", border:`1px solid ${r.selected?"#BFDBFE":"#E5E7EB"}`, borderRadius:7, cursor:"pointer" }}>
+                      <div style={{ width:16, height:16, borderRadius:3, border:`2px solid ${r.selected?"#2563EB":"#D1D5DB"}`, background:r.selected?"#2563EB":"#fff", flexShrink:0, display:"flex", alignItems:"center", justifyContent:"center" }}>
+                        {r.selected && <span style={{ color:"#fff", fontSize:9, fontWeight:700 }}>✓</span>}
+                      </div>
+                      <div style={{ flex:1, minWidth:0 }}>
+                        <div style={{ fontSize:12, fontWeight:600 }}>{r.name}</div>
+                        <div style={{ fontSize:10, color:"#6B7280", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{r.role} · {r.company}</div>
+                      </div>
+                      <div style={{ display:"flex", gap:4, flexShrink:0 }}>
+                        <span style={{ fontSize:10, color:"#6B7280", background:"#F3F4F6", padding:"1px 6px", borderRadius:3 }}>{r.sector}</span>
+                        <span style={{ fontSize:10, color:GRADE_COLOR[r.grade]||"#6B7280", background:`${GRADE_COLOR[r.grade]||"#6B7280"}18`, padding:"1px 6px", borderRadius:3 }}>{r.grade}</span>
+                        {r.email && <span style={{ fontSize:10, color:"#059669", background:"#D1FAE5", padding:"1px 6px", borderRadius:3 }}>✉</span>}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <Btn primary onClick={importApollo} disabled={!apolloResults.filter(r=>r.selected).length}>
+                  Importer {apolloResults.filter(r=>r.selected).length} contacts →
+                </Btn>
+              </>
+            )}
+          </div>
+        </Overlay>
+      )}
+
+      {/* ── ADD CONTACT MODAL ── */}
+      {showAdd && (
+        <Overlay onClose={()=>setShowAdd(false)} title="Add contact">
+          <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
+            <div><Label>Full name *</Label><input value={newC.name} onChange={e=>setNewC(p=>({...p,name:e.target.value}))} placeholder="Sarah Chen" style={inp} autoFocus /></div>
+            <div><Label>Company *</Label><input value={newC.company} onChange={e=>setNewC(p=>({...p,company:e.target.value}))} placeholder="Arcmont Asset Management" style={inp} /></div>
+            <div><Label>Role</Label><input value={newC.role} onChange={e=>setNewC(p=>({...p,role:e.target.value}))} placeholder="Associate - Direct Lending" style={inp} /></div>
+            <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
+              <div><Label>Sector</Label><Sel value={newC.sector} onChange={e=>setNewC(p=>({...p,sector:e.target.value}))} options={SECTORS} /></div>
+              <div><Label>Grade</Label><Sel value={newC.grade} onChange={e=>setNewC(p=>({...p,grade:e.target.value}))} options={GRADES} /></div>
+            </div>
+            <div><Label>Email</Label><input value={newC.email} onChange={e=>setNewC(p=>({...p,email:e.target.value}))} placeholder="firstname@company.com" style={inp} /></div>
+            <div><Label>LinkedIn</Label><input value={newC.linkedin} onChange={e=>setNewC(p=>({...p,linkedin:e.target.value}))} placeholder="linkedin.com/in/..." style={inp} /></div>
+          </div>
+          <div style={{ display:"flex", gap:8, marginTop:14 }}>
+            <Btn outline onClick={()=>setShowAdd(false)}>Cancel</Btn>
+            <Btn primary onClick={addContact} disabled={!newC.name||!newC.company}>Add →</Btn>
+          </div>
+        </Overlay>
+      )}
+
+      {/* ── CALENDAR MODAL ── */}
+      {calShow && calContact && (
+        <Overlay onClose={()=>{setCalShow(false);setCalStatus("");}} title="📅 Schedule call" subtitle={`${calContact.name} · ${calContact.company}`}>
+          <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
+            <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
+              <div><Label>Date</Label><input type="date" value={calDate} onChange={e=>setCalDate(e.target.value)} style={inp} /></div>
+              <div><Label>Time</Label><input type="time" value={calTime} onChange={e=>setCalTime(e.target.value)} style={inp} /></div>
+            </div>
+            <div><Label>Platform</Label><Sel value={calPlatform} onChange={e=>setCalPlatform(e.target.value)} options={["Google Meet","Microsoft Teams","Zoom","Phone"]} /></div>
+            <Btn primary onClick={createCalEvent} disabled={!calDate}>Create event</Btn>
+            {calStatus && <div style={{ fontSize:12, color:calStatus.startsWith("✅")?"#059669":"#B45309" }}>{calStatus}</div>}
+          </div>
+        </Overlay>
+      )}
+    </div>
+  );
 }
 
-function defaultCallDate() {
-  var d = new Date(); d.setDate(d.getDate()+3); d.setHours(10,0,0,0); return d;
+// ── MICRO COMPONENTS ──
+function Btn({ children, onClick, primary, outline, warning, disabled }) {
+  const bg = primary?"#111":warning?"#92400E":"#fff";
+  const color = primary?"#fff":warning?"#FCD34D":"#374151";
+  const border = (primary||warning)?"none":"1.5px solid #E5E7EB";
+  return (
+    <button onClick={onClick} disabled={disabled} style={{ padding:"7px 14px", fontSize:12, fontWeight:600, borderRadius:7, border, background:bg, color:disabled?"#9CA3AF":color, cursor:disabled?"not-allowed":"pointer", opacity:disabled?0.5:1, whiteSpace:"nowrap", transition:"all .1s" }}>
+      {children}
+    </button>
+  );
 }
 
-function setupSheet() {
-  var ss = SpreadsheetApp.openById(SHEET_ID);
-  var sheet = ss.getSheetByName(SHEET_NAME);
-  if (!sheet) sheet = ss.insertSheet(SHEET_NAME);
-  var headers = ["ID","Name","Company","Role","Grade","Sector","Email","LinkedIn","Stage",
-    "Last Contact","Follow-up Date","Notes","Source","School","Message History"];
-  sheet.getRange(1,1,1,headers.length).setValues([headers]).setFontWeight("bold");
-  sheet.setFrozenRows(1);
+function Sel({ value, onChange, options, placeholder }) {
+  return (
+    <select value={value} onChange={onChange} style={{ ...inp, background:"#fff" }}>
+      {placeholder && <option value="">{placeholder}</option>}
+      {options.map(o=><option key={o} value={o}>{o||placeholder}</option>)}
+    </select>
+  );
 }
 
-function debugCheck() {
-  var sheet = getSheet();
-  var data = sheet.getDataRange().getValues();
-  Logger.log("Rows: " + (data.length - 1));
-  for (var i = 1; i < data.length; i++) {
-    Logger.log("Row " + i + " | email: [" + data[i][6] + "] | stage: [" + data[i][8] + "]");
-  }
+function Label({ children }) {
+  return <div style={{ fontSize:11, fontWeight:600, color:"#6B7280", textTransform:"uppercase", letterSpacing:"0.4px", marginBottom:4 }}>{children}</div>;
 }
 
-function getSheet() {
-  return SpreadsheetApp.openById(SHEET_ID).getSheetByName(SHEET_NAME);
+function Overlay({ onClose, title, subtitle, children }) {
+  return (
+    <div style={{ position:"fixed", inset:0, background:"rgba(0,0,0,0.3)", zIndex:60, display:"flex", alignItems:"center", justifyContent:"center", padding:20 }} onClick={onClose}>
+      <div style={{ background:"#fff", borderRadius:12, width:"100%", maxWidth:520, maxHeight:"90vh", overflowY:"auto", boxShadow:"0 20px 60px rgba(0,0,0,0.12)", border:"1px solid #E5E7EB" }} onClick={e=>e.stopPropagation()}>
+        <div style={{ padding:"16px 20px 12px", borderBottom:"1px solid #E5E7EB", display:"flex", justifyContent:"space-between", alignItems:"flex-start" }}>
+          <div>
+            <div style={{ fontSize:15, fontWeight:700 }}>{title}</div>
+            {subtitle && <div style={{ fontSize:11, color:"#9CA3AF", marginTop:2 }}>{subtitle}</div>}
+          </div>
+          <button onClick={onClose} style={{ fontSize:18, color:"#9CA3AF", background:"none", border:"none", cursor:"pointer" }}>×</button>
+        </div>
+        <div style={{ padding:20 }}>{children}</div>
+      </div>
+    </div>
+  );
 }
 
-function todayStr() {
-  return Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy-MM-dd");
-}
+const inp = {
+  width:"100%", background:"#F9FAFB", border:"1.5px solid #E5E7EB",
+  borderRadius:7, padding:"8px 11px", fontSize:12, color:"#111",
+  outline:"none", boxSizing:"border-box",
+};
 
-function safeParseJson(str, fallback) {
-  try { return str ? JSON.parse(str) : fallback; } catch(err) { return fallback; }
-}
+    ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+  </script>
+</body>
+</html>
