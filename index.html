@@ -253,7 +253,7 @@ function App() {
   const syncDelete = async (id) => {
     if (!USE_SHEETS) return;
     try {
-      await sheetsPost("deleteContact", id);
+      await sheetsCall({ action: "deleteContact", data: id });
     } catch(e) { console.warn("Sheets delete sync failed"); }
   };
 
