@@ -237,9 +237,11 @@ function App() {
   // ── Sync batch to Sheets ──
   const syncBatch = async (contactsList) => {
     if (!USE_SHEETS) return;
-    try {
-      await sheetsPost("upsertBatch", contactsList);
-    } catch(e) { console.warn("Sheets batch sync failed"); }
+    for (const contact of contactsList) {
+      try {
+        await sheetsCall({ action: "upsertContact", data: contact });
+      } catch(e) { console.warn("Sheets sync failed for", contact.name); }
+    }
   };
 
   // ── Sync delete to Sheets ──
