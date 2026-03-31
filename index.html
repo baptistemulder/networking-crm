@@ -155,7 +155,7 @@ const generateMsg = async (contact, isFollowUp = false) => {
 
 // ── Create Gmail draft — Apps Script generates + creates in one call ──
 const createGmailDraft = async (contact, isFollowUp = false) => {
-  const slim = { id: contact.id, name: contact.name, company: contact.company, role: contact.role, sector: contact.sector || "", email: contact.email, notes: contact.notes || "", city: contact.city || "", subDepartments: contact.subDepartments || "" };
+  const slim = { id: contact.id, name: contact.name, company: contact.company, role: contact.role, sector: contact.sector || "", email: contact.email, notes: contact.notes || "", city: contact.city || "", subDepartments: contact.subDepartments || "", linkedinProfile: contact.linkedinProfile || "" };
   const params = { action: "createDraft", data: slim, isFollowUp: isFollowUp ? "1" : "0" };
   if (isFollowUp && contact.gmailMessageId) params.replyToId = contact.gmailMessageId;
   const data = await sheetsCall(params);
@@ -234,7 +234,7 @@ function App() {
         grade: contact.grade || "", sector: contact.sector || "", email: contact.email || "",
         linkedin: contact.linkedin || "", stage: contact.stage || "", lastContact: contact.lastContact || "",
         followUpDate: contact.followUpDate || "", notes: contact.notes || "", source: contact.source || "",
-        school: contact.school || "", messageHistory: contact.messageHistory || [] };
+        school: contact.school || "", messageHistory: contact.messageHistory || [], linkedinProfile: contact.linkedinProfile || "" };
       await sheetsCall({ action: "upsertContact", data: slim });
     } catch(e) { console.warn("Sheets sync failed"); }
   };
@@ -367,6 +367,11 @@ function App() {
   const handleBulkDraft = async () => {
     const targets = filtered.filter(c => selectedIds.has(c.id) && c.email);
     if (!targets.length) { setBulkProgress("⚠️ No contacts with email selected"); return; }
+    const missingProfile = targets.filter(c => !c.linkedinProfile);
+    if (missingProfile.length > 0) {
+      setBulkProgress(`⚠️ ${missingProfile.length} contact(s) missing LinkedIn profile: ${missingProfile.map(c=>c.name).join(", ")}`);
+      setBulkGenerating(false); return;
+    }
     setBulkGenerating(true);
     let done = 0;
     for (const contact of targets) {
@@ -417,7 +422,7 @@ function App() {
       grade: r.grade, school: "", linkedin: r.linkedin, email: r.email,
       sector: r.sector, city: r.city || "", subDepartments: r.subDepartments || "",
       stage: "À contacter", notes: "", lastContact: null,
-      followUpDate: null, source: "apollo", messageHistory: []
+      followUpDate: null, source: "apollo", messageHistory: [], linkedinProfile: ""
     }));
     setContacts(p => [...p, ...newContacts]);
     setShowApollo(false); setApolloResults([]); setApolloStep("upload");
@@ -585,8 +590,22 @@ function App() {
                       <td style={{ padding:"10px 14px", fontSize:11, color:isPast(c.followUpDate)?"#B45309":"#9CA3AF" }}>
                         {c.followUpDate?(isPast(c.followUpDate)?`🔔 ${c.followUpDate}`:c.followUpDate):"—"}
                       </td>
-                      <td style={{ padding:"10px 14px", textAlign:"right" }}>
-                        <button onClick={(e)=>{e.stopPropagation();deleteContact(c.id);}} style={{ fontSize:14, color:"#D1D5DB", background:"none", border:"none", cursor:"pointer", lineHeight:1, padding:"2px 4px" }} title="Delete" onMouseEnter={e=>e.currentTarget.style.color="#EF4444"} onMouseLeave={e=>e.currentTarget.style.color="#D1D5DB"}>✕</button>
+                      <td style={{ padding:"6px 8px", textAlign:"right", minWidth:220 }} onClick={e=>e.stopPropagation()}>
+                        <div style={{ display:"flex", alignItems:"flex-start", gap:6, justifyContent:"flex-end" }}>
+                          {c.linkedin && (
+                            <a href={c.linkedin.startsWith("http")?c.linkedin:"https://"+c.linkedin} target="_blank" rel="noreferrer"
+                              style={{ fontSize:11, fontWeight:600, color:"#0A66C2", background:"#E8F0FB", border:"1px solid #0A66C2", borderRadius:4, padding:"3px 8px", textDecoration:"none", whiteSpace:"nowrap", flexShrink:0 }}>
+                              LinkedIn
+                            </a>
+                          )}
+                          <textarea
+                            value={c.linkedinProfile||""} rows={1}
+                            placeholder="Paste LinkedIn profile..."
+                            onChange={e=>updateContact(c.id,{linkedinProfile:e.target.value})}
+                            style={{ fontSize:11, color:"#374151", border:"1px solid #E5E7EB", borderRadius:4, padding:"3px 6px", resize:"vertical", minWidth:150, maxWidth:220, minHeight:26, fontFamily:"inherit", background:c.linkedinProfile?"#F0FDF4":"#fff" }}
+                          />
+                          <button onClick={(e)=>{e.stopPropagation();deleteContact(c.id);}} style={{ fontSize:14, color:"#D1D5DB", background:"none", border:"none", cursor:"pointer", lineHeight:1, padding:"2px 4px", flexShrink:0 }} title="Delete" onMouseEnter={e=>e.currentTarget.style.color="#EF4444"} onMouseLeave={e=>e.currentTarget.style.color="#D1D5DB"}>✕</button>
+                        </div>
                       </td>
                     </tr>
                   ))}
