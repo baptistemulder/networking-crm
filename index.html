@@ -34,8 +34,17 @@ const sheetsCall = async (params) => {
   const url = SHEETS_URL + "?" + Object.entries(params).map(([k,v]) => 
     k + "=" + encodeURIComponent(typeof v === "object" ? JSON.stringify(v) : v)
   ).join("&");
-  const res = await fetch(url);
-  return res.json();
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 45000);
+  try {
+    const res = await fetch(url, { signal: controller.signal });
+    clearTimeout(timeout);
+    return res.json();
+  } catch(e) {
+    clearTimeout(timeout);
+    if (e.name === "AbortError") throw new Error("Request timed out after 45s");
+    throw e;
+  }
 };
 
 const sheetsPost = async (action, data) => {
@@ -344,22 +353,27 @@ function App() {
   const handleSendDraft = async (contact, isFollowUp = false) => {
     if (!contact.email) { setGmailStatus("⚠️ No email — add it first"); return; }
     setGenerating(true); setMessage(""); setGmailStatus("Generating + creating draft...");
-    const result = await createGmailDraft(contact, isFollowUp);
-    setGenerating(false);
-    if (result.ok) {
-      setMessage(result.message);
-      const newStage = isFollowUp ? "Relance envoyée" : "Message envoyé";
-      setGmailStatus(`✅ Draft created in Gmail → ${newStage}`);
-      const patch = {
-        stage: newStage,
-        lastContact: todayStr(),
-        followUpDate: addDays(todayStr(), FOLLOWUP_DAYS),
-        messageHistory: [...(contact.messageHistory||[]), { date: todayStr(), type: isFollowUp ? "followup" : "initial", preview: result.message.slice(0,80) }]
-      };
-      if (!isFollowUp && result.messageId) patch.gmailMessageId = result.messageId;
-      updateContact(contact.id, patch);
-    } else {
-      setGmailStatus("⚠️ Gmail error — check Apps Script logs");
+    try {
+      const result = await createGmailDraft(contact, isFollowUp);
+      if (result.ok) {
+        setMessage(result.message);
+        const newStage = isFollowUp ? "Relance envoyée" : "Message envoyé";
+        setGmailStatus(`✅ Draft created in Gmail → ${newStage}`);
+        const patch = {
+          stage: newStage,
+          lastContact: todayStr(),
+          followUpDate: addDays(todayStr(), FOLLOWUP_DAYS),
+          messageHistory: [...(contact.messageHistory||[]), { date: todayStr(), type: isFollowUp ? "followup" : "initial", preview: (result.message||"").slice(0,80) }]
+        };
+        if (!isFollowUp && result.messageId) patch.gmailMessageId = result.messageId;
+        updateContact(contact.id, patch);
+      } else {
+        setGmailStatus("⚠️ " + (result.error || "Gmail error — check Apps Script logs"));
+      }
+    } catch(e) {
+      setGmailStatus("⚠️ " + (e.message || "Request failed — try again"));
+    } finally {
+      setGenerating(false);
     }
   };
 
