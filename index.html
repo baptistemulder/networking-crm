@@ -383,27 +383,39 @@ function App() {
     if (!targets.length) { setBulkProgress("⚠️ No contacts with email selected"); return; }
     const missingProfile = targets.filter(c => !c.linkedinProfile);
     if (missingProfile.length > 0) {
-      setBulkProgress(`⚠️ ${missingProfile.length} contact(s) missing LinkedIn profile: ${missingProfile.map(c=>c.name).join(", ")}`);
-      setBulkGenerating(false); return;
+      setBulkProgress(`⚠️ Missing LinkedIn profile: ${missingProfile.map(c=>c.name).join(", ")}`);
+      return;
     }
     setBulkGenerating(true);
-    let done = 0;
-    for (const contact of targets) {
-      setBulkProgress(`⏳ ${done}/${targets.length} — generating for ${contact.name}...`);
-      const msg = await generateMsg(contact, false);
-      await createGmailDraft(contact, false);
-      updateContact(contact.id, {
-        stage: "Message envoyé",
-        lastContact: todayStr(),
-        followUpDate: addDays(todayStr(), FOLLOWUP_DAYS),
-        messageHistory: [...(contact.messageHistory||[]), { date: todayStr(), type: "initial", preview: msg.slice(0,80) }]
-      });
-      done++;
+    let done = 0; let errors = 0;
+    try {
+      for (const contact of targets) {
+        setBulkProgress(`⏳ ${done}/${targets.length} — ${contact.name}...`);
+        try {
+          const result = await createGmailDraft(contact, false);
+          if (result.ok) {
+            updateContact(contact.id, {
+              stage: "Message envoyé",
+              lastContact: todayStr(),
+              followUpDate: addDays(todayStr(), FOLLOWUP_DAYS),
+              messageHistory: [...(contact.messageHistory||[]), { date: todayStr(), type: "initial", preview: (result.message||"").slice(0,80) }]
+            });
+            done++;
+          } else {
+            errors++;
+            setBulkProgress(`⚠️ Error for ${contact.name}: ${result.error||"unknown"}`);
+          }
+        } catch(e) {
+          errors++;
+          setBulkProgress(`⚠️ Error for ${contact.name}: ${e.message||"timeout"}`);
+        }
+      }
+      setBulkProgress(`✅ ${done} drafts created${errors > 0 ? ` (${errors} errors)` : ""}`);
+      setSelectedIds(new Set());
+      setTimeout(() => setBulkProgress(""), 5000);
+    } finally {
+      setBulkGenerating(false);
     }
-    setBulkProgress(`✅ ${done} drafts created in Gmail`);
-    setSelectedIds(new Set());
-    setBulkGenerating(false);
-    setTimeout(() => setBulkProgress(""), 4000);
   };
 
   // ── Apollo CSV import ──
