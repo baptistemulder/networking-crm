@@ -166,7 +166,7 @@ const generateMsg = async (contact, isFollowUp = false) => {
 
 // ── Create Gmail draft — Apps Script generates + creates in one call ──
 const createGmailDraft = async (contact, isFollowUp = false, attempt = 1) => {
-  const slim = { id: contact.id, name: contact.name, company: contact.company, role: contact.role, sector: contact.sector || "", email: contact.email, notes: contact.notes || "", city: contact.city || "", subDepartments: contact.subDepartments || "", linkedinProfile: contact.linkedinProfile || "" };
+  const slim = { id: contact.id, name: contact.name, company: contact.company, role: contact.role, sector: contact.sector || "", email: contact.email, notes: contact.notes || "", city: contact.city || "", subDepartments: contact.subDepartments || "", linkedinProfile: (contact.linkedinProfile || "").slice(0, 3000) };
   const params = { action: "createDraft", data: slim, isFollowUp: isFollowUp ? "1" : "0" };
   if (isFollowUp && contact.gmailMessageId) params.replyToId = contact.gmailMessageId;
   try {
